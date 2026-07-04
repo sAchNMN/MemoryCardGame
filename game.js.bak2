@@ -1,0 +1,2410 @@
+﻿/**
+ * 记忆翻牌大师 - game.js
+ * 微信小游戏纯代码版 · 屏幕自适应 · 技术美术优化版 · 音频增强
+ */
+/**
+ * 记忆翻牌大师 · AudioManager
+ * 微信小游戏音频系统 — 程序化合成，零外部音频文件
+ *
+ * 兼容性策略：
+ * 1. 优先使用 wx.createWebAudioContext()（基础库 2.28.0+）
+ * 2. 不支持时创建静默 stub，保证游戏不崩溃、API 仍可调用
+ * 3. 首次用户交互后惰性初始化，绕过自动播放策略
+ */
+var AudioManager = (function() {
+
+  var _ctx = null;          // AudioContext
+  var _ready = false;       // 是否已初始化
+  var _inited = false;      // 是否已调用过 init
+  var _currentState = '';   // 当前 BGM 状态
+  var _bgmInterval = null;  // BGM 循环句柄
+
+  // ========== 公开开关 ==========
+  var api = {
+    musicOn: false,
+    sfxOn: true,
+    masterVolume: 1.0,
+    available: false
+  };
+
+  // ========== 初始化 ==========
+  function init() {
+    if (_inited) return;
+    _inited = true;
+
+    try {
+      // 只有在 wx 环境且存在 createWebAudioContext 时才启用真实音频
+      if (typeof wx !== 'undefined' && wx.createWebAudioContext) {
+        _ctx = wx.createWebAudioContext();
+        if (_ctx && _ctx.resume) {
+          if (_ctx.state === 'suspended') {
+            _ctx.resume().catch(function(){});
+          }
+          _ready = true;
+          api.available = true;
+          if (typeof console !== 'undefined' && console.log) {
+            console.log('[Audio] WebAudio ready');
+          }
+          return;
+        }
+      }
+    } catch (e) {
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn('[Audio] WebAudio init failed:', e.message || e);
+      }
+    }
+
+    // 静默 fallback
+    _ready = false;
+    api.available = false;
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[Audio] WebAudio not supported, audio disabled');
+    }
+  }
+
+  // ========== 工具：播放单音 ==========
+  function playTone(freq, duration, type, volume, rampTo) {
+    if (!_ready || !api.sfxOn) return;
+    try {
+      var osc = _ctx.createOscillator();
+      var gain = _ctx.createGain();
+      osc.type = type || 'sine';
+      var now = _ctx.currentTime;
+      osc.frequency.setValueAtTime(freq, now);
+      if (rampTo !== undefined) {
+        osc.frequency.exponentialRampToValueAtTime(Math.max(rampTo, 20), now + duration);
+      }
+      var vol = (volume || 0.3) * api.masterVolume;
+      gain.gain.setValueAtTime(Math.min(vol, 0.8), now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+      osc.connect(gain);
+      gain.connect(_ctx.destination);
+      osc.start(now);
+      osc.stop(now + duration + 0.01);
+    } catch(e) {}
+  }
+
+  // ========== 工具：播放和弦 ==========
+  function playChord(freqs, duration, type, volume) {
+    if (!_ready || !api.sfxOn) return;
+    try {
+      var now = _ctx.currentTime;
+      var vol = (volume || 0.25) * api.masterVolume;
+      for (var i = 0; i < freqs.length; i++) {
+        var osc = _ctx.createOscillator();
+        var gain = _ctx.createGain();
+        osc.type = type || 'sine';
+        osc.frequency.setValueAtTime(freqs[i], now);
+        gain.gain.setValueAtTime(Math.min(vol / freqs.length, 0.3), now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+        osc.connect(gain);
+        gain.connect(_ctx.destination);
+        osc.start(now);
+        osc.stop(now + duration + 0.01);
+      }
+    } catch(e) {}
+  }
+
+  // ========== 工具：播放琶音 ==========
+  function playArpeggio(freqs, noteDuration, type, volume) {
+    if (!_ready || !api.sfxOn) return;
+    try {
+      var now = _ctx.currentTime;
+      var vol = (volume || 0.25) * api.masterVolume;
+      for (var i = 0; i < freqs.length; i++) {
+        var osc = _ctx.createOscillator();
+        var gain = _ctx.createGain();
+        osc.type = type || 'triangle';
+        osc.frequency.setValueAtTime(freqs[i], now + i * noteDuration);
+        gain.gain.setValueAtTime(Math.min(vol, 0.3), now + i * noteDuration);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + i * noteDuration + noteDuration);
+        osc.connect(gain);
+        gain.connect(_ctx.destination);
+        osc.start(now + i * noteDuration);
+        osc.stop(now + i * noteDuration + noteDuration + 0.01);
+      }
+    } catch(e) {}
+  }
+
+  // ========== 工具：播放噪声（短促冲击） ==========
+  function playNoise(duration, volume, lowpass) {
+    if (!_ready || !api.sfxOn) return;
+    try {
+      var bufferSize = Math.floor(Math.max(duration, 0.01) * _ctx.sampleRate);
+      var buffer = _ctx.createBuffer(1, bufferSize, _ctx.sampleRate);
+      var data = buffer.getChannelData(0);
+      for (var i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1);
+      }
+      var source = _ctx.createBufferSource();
+      source.buffer = buffer;
+      var gain = _ctx.createGain();
+      var now = _ctx.currentTime;
+      var vol = (volume || 0.15) * api.masterVolume;
+      gain.gain.setValueAtTime(Math.min(vol, 0.5), now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+      if (lowpass) {
+        var filter = _ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(lowpass, now);
+        source.connect(filter);
+        filter.connect(gain);
+      } else {
+        source.connect(gain);
+      }
+      gain.connect(_ctx.destination);
+      source.start(now);
+      source.stop(now + duration + 0.01);
+    } catch(e) {}
+  }
+
+  // ========== 停止 BGM ==========
+  function _stopBgNodes() {
+    _currentState = '';
+  }
+
+  // ========== 启动 BGM 循环 ==========
+  function _startBgmLoop(notes, bpm, type, volume) {
+    if (!_ready || !api.musicOn) return;
+    try {
+      _stopBgNodes();
+      var beatDuration = 60 / bpm;
+      var vol = (volume || 0.12) * api.masterVolume;
+      var step = 0;
+
+      if (_bgmInterval) clearInterval(_bgmInterval);
+
+      function playStep() {
+        if (!api.musicOn || !_ready) return;
+        var note = notes[step % notes.length];
+        try {
+          var now = _ctx.currentTime;
+          var dur = beatDuration * 0.85;
+          if (note) {
+            var osc = _ctx.createOscillator();
+            var gain = _ctx.createGain();
+            osc.type = type || 'triangle';
+            osc.frequency.setValueAtTime(note, now);
+            gain.gain.setValueAtTime(Math.min(vol, 0.2), now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+            gain.connect(_ctx.destination);
+            osc.connect(gain);
+            osc.start(now);
+            osc.stop(now + dur + 0.01);
+          }
+          // 低音脉冲
+          if (step % 4 === 0) {
+            var bass = _ctx.createOscillator();
+            var bg = _ctx.createGain();
+            bass.type = 'sine';
+            bass.frequency.setValueAtTime(110, now);
+            bg.gain.setValueAtTime(Math.min(vol * 0.3, 0.08), now);
+            bg.gain.exponentialRampToValueAtTime(0.001, now + dur * 0.5);
+            bg.connect(_ctx.destination);
+            bass.connect(bg);
+            bass.start(now);
+            bass.stop(now + dur * 0.5 + 0.01);
+          }
+          // 打击乐
+          if (step % 2 === 0) {
+            playNoise(0.04, 0.08, 600);
+          }
+        } catch(e) {}
+        step++;
+      }
+
+      playStep();
+      _bgmInterval = setInterval(playStep, beatDuration * 1000);
+    } catch(e) {}
+  }
+
+  // ========== 播放命名音效 ==========
+  function play(name) {
+    if (!_ready || !api.sfxOn) return;
+    switch (name) {
+      case 'card_flip':
+        playTone(400, 0.08, 'sine', 0.3, 800);
+        break;
+      case 'card_unflip':
+        playTone(800, 0.08, 'sine', 0.2, 400);
+        break;
+      case 'card_match':
+        playChord([523.25, 659.25, 783.99], 0.4, 'sine', 0.3);
+        break;
+      case 'card_mismatch':
+        playTone(500, 0.25, 'sawtooth', 0.2, 150);
+        break;
+      case 'combo':
+        playArpeggio([523, 659, 784, 1047], 0.08, 'triangle', 0.25);
+        break;
+      case 'button_click':
+        playTone(1000, 0.03, 'square', 0.15);
+        break;
+      case 'level_up':
+        playArpeggio([262, 330, 392, 523], 0.12, 'triangle', 0.3);
+        setTimeout(function() { playChord([523, 659], 0.6, 'sine', 0.25); }, 50);
+        break;
+      case 'game_over':
+        playTone(300, 1.0, 'triangle', 0.25, 60);
+        break;
+      case 'countdown_warn':
+        playTone(880, 0.05, 'sine', 0.25);
+        break;
+      case 'page_turn':
+        playNoise(0.08, 0.12, 2000);
+        break;
+      case 'star_earned':
+        playTone(1200, 0.15, 'sine', 0.2, 1600);
+        break;
+      default:
+        break;
+    }
+  }
+
+  // ========== 切换 BGM 状态 ==========
+  function setState(state) {
+    if (!_ready || !api.musicOn) {
+      _currentState = state;
+      return;
+    }
+    if (state === _currentState) return;
+    switch (state) {
+      case 'MENU':
+        _startBgmLoop([262, 294, 330, 392, 440], 80, 'triangle', 0.08);
+        break;
+      case 'SHOWING':
+        _startBgmLoop([523, 587, 659, 784, 880, 1047], 90, 'triangle', 0.10);
+        break;
+      case 'PLAYING':
+        _startBgmLoop([392, 440, 523, 587, 659, 784, 880], 100, 'triangle', 0.12);
+        break;
+      case 'OVER_WIN':
+        _startBgmLoop([523, 659, 784, 1047, 1319], 80, 'triangle', 0.15);
+        break;
+      case 'OVER_LOSE':
+        _startBgmLoop([196, 175, 165, 147], 60, 'triangle', 0.08);
+        break;
+      case 'NONE':
+      default:
+        _stopBgNodes();
+        if (_bgmInterval) { clearInterval(_bgmInterval); _bgmInterval = null; }
+        break;
+    }
+    _currentState = state;
+  }
+
+  // ========== 停止 BGM ==========
+  function stopMusic() {
+    setState('NONE');
+  }
+
+  // ========== 获取当前 BGM 状态 ==========
+  function getState() {
+    return _currentState;
+  }
+
+  // ========== 切换开关 ==========
+  function toggleMusic() {
+    api.musicOn = !api.musicOn;
+    if (!api.musicOn) {
+      if (_bgmInterval) { clearInterval(_bgmInterval); _bgmInterval = null; }
+    } else if (_currentState && _currentState !== '' && _currentState !== 'NONE') {
+      var s = _currentState;
+      _currentState = '';
+      setState(s);
+    }
+    return api.musicOn;
+  }
+
+  function toggleSFX() {
+    api.sfxOn = !api.sfxOn;
+    return api.sfxOn;
+  }
+
+  // ========== 导出公共接口 ==========
+  api.init = init;
+  api.play = play;
+  api.setState = setState;
+  api.stopMusic = stopMusic;
+  api.toggleMusic = toggleMusic;
+  api.toggleSFX = toggleSFX;
+  api.getState = getState;
+
+  return api;
+
+})();
+
+var _audioInited = false;
+// ======================================
+// 技术美术优化：视觉特效系统
+// ======================================
+
+// --- 背景光斑粒子 ---
+var bgParticles = [];
+function initBgParticles() {
+  bgParticles = [];
+  var count = Math.max(8, Math.floor(W * H / 10000));
+  for (var i = 0; i < count; i++) {
+    bgParticles.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      r: Math.random() * S(0.005) + S(0.001),
+      dx: (Math.random() - 0.5) * 0.25,
+      dy: (Math.random() - 0.5) * 0.15 - 0.05,
+      baseAlpha: Math.random() * 0.10 + 0.02,
+      color: ['#FFD700','#07c160','#4A90D9','#FF6B6B','#9775FA','#FFA94D'][Math.floor(Math.random()*6)]
+    });
+  }
+}
+function updateBgParticles() {
+  for (var i = 0; i < bgParticles.length; i++) {
+    var p = bgParticles[i];
+    p.x += p.dx; p.y += p.dy;
+    if (p.x < -20) p.x = W + 20;
+    if (p.x > W + 20) p.x = -20;
+    if (p.y < -20) p.y = H + 20;
+    if (p.y > H + 20) p.y = -20;
+  }
+}
+function drawBgParticles(ctx) {
+  for (var i = 0; i < bgParticles.length; i++) {
+    var p = bgParticles[i];
+    ctx.globalAlpha = p.baseAlpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// --- 得分飘字 ---
+var floatingTexts = [];
+function addFloatingText(text, x, y, color) {
+  floatingTexts.push({
+    text: text, x: x, y: y,
+    color: color || '#FFD700',
+    alpha: 1, scale: 1.6, yOff: 0,
+    start: Date.now(), duration: 1000
+  });
+}
+function updateFloatingTexts() {
+  var now = Date.now();
+  var kept = [];
+  for (var i = 0; i < floatingTexts.length; i++) {
+    var ft = floatingTexts[i];
+    var p = (now - ft.start) / ft.duration;
+    if (p >= 1) continue;
+    ft.alpha = 1 - p;
+    ft.yOff = -p * S(0.07);
+    ft.scale = 1.6 - p * 0.6;
+    kept.push(ft);
+  }
+  floatingTexts = kept;
+}
+function drawFloatingTexts(ctx) {
+  for (var i = 0; i < floatingTexts.length; i++) {
+    var ft = floatingTexts[i];
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, ft.alpha);
+    ctx.translate(ft.x, ft.y + ft.yOff);
+    ctx.scale(ft.scale, ft.scale);
+    ctx.fillStyle = ft.color;
+    ctx.font = 'bold ' + sz(0.024) + 'px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = ft.color;
+    ctx.shadowBlur = S(0.005);
+    ctx.fillText(ft.text, 0, 0);
+    ctx.shadowColor = 'rgba(0,0,0,0)';
+    ctx.restore();
+  }
+}
+
+// --- 配对成功粒子爆发 ---
+var burstParticles = [];
+function emitBurst(x, y, color) {
+  var count = 16;
+  for (var i = 0; i < count; i++) {
+    var angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+    var speed = Math.random() * 3.5 + 1.5;
+    burstParticles.push({
+      x: x, y: y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      r: Math.random() * S(0.005) + S(0.001),
+      color: color || '#FFD700',
+      born: Date.now(),
+      life: 550 + Math.random() * 350
+    });
+  }
+}
+function updateBurstParticles() {
+  var now = Date.now();
+  var kept = [];
+  for (var i = 0; i < burstParticles.length; i++) {
+    var p = burstParticles[i];
+    var elapsed = now - p.born;
+    if (elapsed > p.life) continue;
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.1;
+    p.vx *= 0.95; p.vy *= 0.95;
+    p.alpha = 1 - elapsed / p.life;
+    kept.push(p);
+  }
+  burstParticles = kept;
+}
+function drawBurstParticles(ctx) {
+  for (var i = 0; i < burstParticles.length; i++) {
+    var p = burstParticles[i];
+    ctx.beginPath();
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = Math.max(0, p.alpha);
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+// --- 连击动画 ---
+var comboAnim = null;
+function triggerComboAnim(combo) {
+  comboAnim = { combo: combo, scale: 2.2, alpha: 1, yOff: 0, start: Date.now(), duration: 750 };
+}
+function updateComboAnim() {
+  if (!comboAnim) return;
+  var p = (Date.now() - comboAnim.start) / comboAnim.duration;
+  if (p >= 1) { comboAnim = null; return; }
+  comboAnim.scale = 2.2 - p * 1.2;
+  comboAnim.alpha = 1 - p * 0.4;
+  comboAnim.yOff = -p * S(0.05);
+}
+function drawComboAnim(ctx) {
+  if (!comboAnim) return;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, comboAnim.alpha);
+  ctx.translate(W / 2, H * 0.33 + comboAnim.yOff);
+  ctx.scale(comboAnim.scale, comboAnim.scale);
+  // 外发光
+  ctx.shadowColor = '#FFD700';
+  ctx.shadowBlur = S(0.01);
+  ctx.fillStyle = '#FFD700';
+  ctx.font = 'bold ' + sz(0.03) + 'px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('连击 x' + comboAnim.combo, 0, 0);
+  ctx.shadowColor = 'rgba(0,0,0,0)';
+  ctx.restore();
+}
+
+// ======================================
+// 关卡配置
+// ======================================
+var LEVELS = [
+  { id:1,name:'初试身手',rows:4,cols:4,time:90,showPreview:true,previewTime:2500,colorMode:'bright',stars:[90,70,0] },
+  { id:2,name:'渐入佳境',rows:4,cols:4,time:75,showPreview:true,previewTime:2200,colorMode:'bright',stars:[95,75,0] },
+  { id:3,name:'初阶考验',rows:4,cols:4,time:60,showPreview:true,previewTime:2000,colorMode:'bright',stars:[100,80,0] },
+  { id:4,name:'步入广场',rows:4,cols:5,time:120,showPreview:true,previewTime:2200,colorMode:'warm',stars:[120,90,0] },
+  { id:5,name:'渐增难度',rows:4,cols:5,time:105,showPreview:true,previewTime:2000,colorMode:'cold',stars:[125,95,0] },
+  { id:6,name:'中阶考验',rows:4,cols:5,time:90,showPreview:true,previewTime:1800,colorMode:'mixed',stars:[130,100,0] },
+  { id:7,name:'记忆迷宫',rows:4,cols:6,time:150,showPreview:true,previewTime:2000,colorMode:'rainbow',stars:[150,110,0] },
+  { id:8,name:'记忆迷宫2',rows:4,cols:6,time:135,showPreview:true,previewTime:1800,colorMode:'rainbow',stars:[155,115,0] },
+  { id:9,name:'高阶考验',rows:4,cols:6,time:120,showPreview:true,previewTime:1500,colorMode:'rainbow',stars:[160,120,0] },
+  { id:10,name:'极限挑战',rows:5,cols:6,time:180,showPreview:true,previewTime:1800,colorMode:'pastel',stars:[180,130,0] },
+  { id:11,name:'极限挑战2',rows:5,cols:6,time:165,showPreview:true,previewTime:1500,colorMode:'pastel',stars:[185,135,0] },
+  { id:12,name:'专家考验',rows:5,cols:6,time:150,showPreview:true,previewTime:1200,colorMode:'pastel',stars:[190,140,0] },
+  { id:13,name:'大师之路',rows:6,cols:6,time:240,showPreview:true,previewTime:1500,colorMode:'random',stars:[220,160,0] },
+  { id:14,name:'大师之路2',rows:6,cols:6,time:220,showPreview:true,previewTime:1200,colorMode:'random',stars:[230,170,0] },
+  { id:15,name:'终极记忆',rows:6,cols:6,time:200,showPreview:true,previewTime:1000,colorMode:'random',stars:[240,180,0] }
+];
+// ======================================
+// 颜色系统 — HSL 色相均匀分布，保证每对牌颜色明显不同
+// ======================================
+var GOLDEN_RATIO = 0.618033988749895;
+
+function hslToHex(h, s, l) {
+  var c = (1 - Math.abs(2*l - 1)) * s;
+  var x = c * (1 - Math.abs((h/60) % 2 - 1));
+  var m = l - c/2;
+  var r=0,g=0,b=0;
+  if(h<60){r=c;g=x;b=0;}
+  else if(h<120){r=x;g=c;b=0;}
+  else if(h<180){r=0;g=c;b=x;}
+  else if(h<240){r=0;g=x;b=c;}
+  else if(h<300){r=x;g=0;b=c;}
+  else{r=c;g=0;b=x;}
+  r=Math.round((r+m)*255);g=Math.round((g+m)*255);b=Math.round((b+m)*255);
+  return '#'+[r,g,b].map(function(v){return v.toString(16).padStart(2,'0');}).join('');
+}
+
+function generateDistinctColors(count) {
+  var out = [];
+  var hue = Math.random() * 360;
+  for(var i=0;i<count;i++){
+    hue = (hue + GOLDEN_RATIO * 360) % 360;
+    var s = 0.65 + (i%3)*0.12;
+    var l = 0.50 + ((i*2)%5)*0.06;
+    out.push(hslToHex(hue, s, l));
+  }
+  return out;
+}
+
+function getLevelColors(level) {
+  var totalPairs = level.rows * level.cols / 2;
+  return generateDistinctColors(totalPairs);
+}
+
+// ======================================
+// Canvas 初始化 — 高分辨率绘制，避开刘海
+// ======================================
+var canvas = wx.createCanvas();
+var ctx = canvas.getContext('2d');
+var sysInfo = wx.getSystemInfoSync();
+var W = sysInfo.windowWidth || sysInfo.screenWidth || 375;
+var H = sysInfo.windowHeight || sysInfo.screenHeight || 667;
+var DPR = sysInfo.pixelRatio || 2;
+var safeArea = sysInfo.safeArea || { top: 0, left: 0, width: W, height: H };
+var safeTop = safeArea.top || 0;
+if (W <= 0) W = 375;
+if (H <= 0) H = 667;
+if (DPR <= 0) DPR = 2;
+if (safeTop < 0) safeTop = 0;
+// 使用物理像素尺寸提高清晰度，绘制时按逻辑像素坐标
+if (canvas.width !== W * DPR) canvas.width = Math.floor(W * DPR);
+if (canvas.height !== H * DPR) canvas.height = Math.floor(H * DPR);
+if (canvas.style) { canvas.style.width = W + 'px'; canvas.style.height = H + 'px'; }
+ctx.scale(DPR, DPR);
+
+// ======================================
+// 自适应尺寸
+// ======================================
+function S(ratio) { return Math.floor(H * ratio); }
+function SW(ratio) { return Math.floor(W * ratio); }
+function sz(ratio) { return Math.floor(H * ratio); }
+
+function fitCardSize(cols, rows) {
+  var gap = S(0.012);
+  var maxW = (W - S(0.06) * 2 - gap * (cols - 1)) / cols;
+  var maxH = (H - S(0.16) - S(0.04) - gap * (rows - 1)) / rows;
+  var size = Math.min(maxW, maxH);
+  return { w: Math.floor(size), h: Math.floor(size * 1.14), gap: gap };
+}
+
+// ======================================
+// 进度 & 金币存储
+// ======================================
+function loadProgress() { try { return wx.getStorageSync('level_progress') || {}; } catch(e) { return {}; } }
+function saveProgress(levelId, stars) { var p=loadProgress(); if(!p[levelId]||stars>p[levelId])p[levelId]=stars; try{wx.setStorageSync('level_progress',p);}catch(e){} }
+function getStars(levelId) { return loadProgress()[levelId]||0; }
+function isLevelUnlocked(levelId) { if(levelId===1)return true; return (loadProgress()[levelId-1]||0)>0; }
+function loadCoins() { try { return wx.getStorageSync('coins')||0; } catch(e) { return 0; } }
+function saveCoins(n) { try { wx.setStorageSync('coins', Math.max(0,n)); } catch(e) {} }
+function loadDailyStreak() { try { return wx.getStorageSync('daily_streak')||{lastDate:'',streak:0,history:[]}; } catch(e) { return {lastDate:'',streak:0,history:[]}; } }
+function saveDailyStreak(data) { try { wx.setStorageSync('daily_streak',data); } catch(e) {} }
+
+// ======================================
+// 成就系统
+// ======================================
+var ACHIEVEMENTS = [
+  {id:'first_win',   icon:'🎮', name:'初次通关', desc:'完成任意一关'},
+  {id:'all_levels',   icon:'👑', name:'全部通关', desc:'通关全部15关'},
+  {id:'no_mistakes',  icon:'⭐', name:'完美匹配', desc:'0错误完成一关（3星）'},
+  {id:'speed_run',    icon:'⚡', name:'闪电记忆', desc:'30秒内完成一关'},
+  {id:'no_props',     icon:'🧠', name:'纯粹记忆', desc:'不使用任何道具通关'},
+  {id:'daily_first',  icon:'📅', name:'每日打卡', desc:'完成每日挑战'},
+  {id:'streak_3',    icon:'🔥', name:'连续三天', desc:'每日挑战连续打卡3天'},
+  {id:'streak_7',    icon:'💎', name:'一周坚持', desc:'每日挑战连续打卡7天'},
+  {id:'all_props',    icon:'🎒', name:'道具大师', desc:'在一局中使用全部4种道具'},
+  {id:'games_10',     icon:'📊', name:'记忆新秀', desc:'累计游玩10局'},
+  {id:'games_50',     icon:'🏆', name:'记忆高手', desc:'累计游玩50局'},
+  {id:'combo_5',      icon:'🎯', name:'连击达人', desc:'一局内达成5连击'},
+  {id:'timed_20',     icon:'⏱️', name:'限时达人', desc:'限时模式单局匹配20对以上'},
+];
+
+// ======================================
+// 商店系统（金币经济闭环）
+// ======================================
+var SHOP_ITEMS = [
+  { id:'cardback_classic', name:'经典卡背', icon:'🎴', price:0,   type:'cardback', desc:'默认经典卡背', color:'#1a1a2e' },
+  { id:'cardback_sakura',  name:'樱花卡背', icon:'🌸', price:200, type:'cardback', desc:'浪漫樱花主题', color:'#FFB7C5' },
+  { id:'cardback_ocean',   name:'海洋卡背', icon:'🌊', price:200, type:'cardback', desc:'深邃海洋波纹', color:'#1E90FF' },
+  { id:'cardback_flame',   name:'火焰卡背', icon:'🔥', price:300, type:'cardback', desc:'炽热火焰纹理', color:'#FF4500' },
+  { id:'cardback_starfield',name:'星空卡背', icon:'🌐', price:300, type:'cardback', desc:'神秘星空图案', color:'#191970' },
+  { id:'cardback_diamond',  name:'钻石卡背', icon:'💎', price:500, type:'cardback', desc:'闪耀钻石光芒', color:'#B9F2FF' },
+  { id:'cardback_china',   name:'中国红卡背',icon:'🏆', price:500, type:'cardback', desc:'中国红经典卡背', color:'#C41E3A' },
+  { id:'achievement_frame',name:'成就展示框',icon:'🏆', price:800, type:'deco',     desc:'成就页金色展示框', color:'#FFD700' },
+];
+
+function loadPurchasedItems() {
+  try { return wx.getStorageSync('purchased_items') || ['cardback_classic']; }
+  catch(e) { return ['cardback_classic']; }
+}
+
+function saveShopState(){
+  try{ wx.setStorageSync('selected_card_back', state.selectedCardBack); }catch(e){}
+}
+function savePurchasedItems(items) {
+  try { wx.setStorageSync('purchased_items', items); } catch(e) {}
+}
+function isItemPurchased(itemId) {
+  return loadPurchasedItems().indexOf(itemId) >= 0;
+}
+function purchaseItem(itemId) {
+  var item = null;
+  for (var i = 0; i < SHOP_ITEMS.length; i++) {
+    if (SHOP_ITEMS[i].id === itemId) { item = SHOP_ITEMS[i]; break; }
+  }
+  if (!item) return { ok:false, msg:'商品不存在' };
+  if (isItemPurchased(itemId)) return { ok:false, msg:'已经购买过了' };
+  if (state.coins < item.price) return { ok:false, msg:'金币不足' };
+  state.coins -= item.price;
+  saveCoins(state.coins);
+  var items = loadPurchasedItems();
+  items.push(itemId);
+  savePurchasedItems(items);
+  // 如果是卡背，自动装备
+  if (item.type === 'cardback') state.selectedCardBack = itemId;
+  return { ok:true, msg:'购买成功！' };
+}
+
+function loadAchievements() {
+  try { return wx.getStorageSync('achievements') || {}; }
+  catch(e) { return {}; }
+}
+function saveAchievement(id) {
+  var data = loadAchievements();
+  if (data[id]) return false; // already unlocked
+  data[id] = { unlockedAt: new Date().toISOString() };
+  try { wx.setStorageSync('achievements', data); } catch(e) {}
+  return true; // newly unlocked
+}
+function isAchievementUnlocked(id) {
+  return !!loadAchievements()[id];
+}
+function loadAchievementStats() {
+  try { return wx.getStorageSync('achievement_stats') || { gamesPlayed:0, maxCombo:0, propsUsed:{} }; }
+  catch(e) { return { gamesPlayed:0, maxCombo:0, propsUsed:{} }; }
+}
+function saveAchievementStats(stats) {
+  try { wx.setStorageSync('achievement_stats', stats); } catch(e) {}
+}
+
+// ======================================
+// 成就检测与弹窗
+// ======================================
+function getAchStats() {
+  if (!state._achievementStats) {
+    state._achievementStats = loadAchievementStats();
+  }
+  return state._achievementStats;
+}
+function checkAndUnlock(id) {
+  if (isAchievementUnlocked(id)) return false;
+  saveAchievement(id);
+  // 成就解锁金币奖励（每个成就 50 金币）
+  var achCoinReward = 50;
+  state.coins += achCoinReward;
+  saveCoins(state.coins);
+  // 找到成就定义，准备弹窗
+  for (var i = 0; i < ACHIEVEMENTS.length; i++) {
+    if (ACHIEVEMENTS[i].id === id) {
+      state._achievementPopup = {
+        id: id,
+        icon: ACHIEVEMENTS[i].icon,
+        name: ACHIEVEMENTS[i].name,
+        desc: ACHIEVEMENTS[i].desc,
+        coinReward: achCoinReward
+      };
+      return true;
+    }
+  }
+  return false;
+}
+function checkAchievementsAfterGame(win) {
+  var stats = getAchStats();
+  // 累计游玩局数
+  stats.gamesPlayed = (stats.gamesPlayed || 0) + 1;
+  // 本局用时的判断（用于闪电记忆）
+  var used = (state.currentLevel.time || 60) - state.timeLeft;
+  // 初次通关
+  if (win && !isAchievementUnlocked('first_win')) {
+    checkAndUnlock('first_win');
+  }
+  // 0错误通关（3星）
+  if (win && state.mistakes === 0) {
+    checkAndUnlock('no_mistakes');
+  }
+  // 30秒内完成
+  if (win && used > 0 && used < 30) {
+    checkAndUnlock('speed_run');
+  }
+  // 不使用道具通关
+  var propsUsedThisGame = state._propsUsedThisGame || {};
+  var usedAnyProp = !!(propsUsedThisGame.peek || propsUsedThisGame.hint || propsUsedThisGame.freeze || propsUsedThisGame.shuffle);
+  if (win && !usedAnyProp) {
+    checkAndUnlock('no_props');
+  }
+  // 每日挑战完成
+  if (win && state.isDaily) {
+    checkAndUnlock('daily_first');
+  }
+  // 连续打卡3天 / 7天
+  var ds = loadDailyStreak();
+  if (ds.streak >= 3) checkAndUnlock('streak_3');
+  if (ds.streak >= 7) checkAndUnlock('streak_7');
+  // 道具大师：本局使用了全部4种道具
+  if (propsUsedThisGame.peek && propsUsedThisGame.hint && propsUsedThisGame.freeze && propsUsedThisGame.shuffle) {
+    checkAndUnlock('all_props');
+  }
+  // 累计游玩
+  if (stats.gamesPlayed >= 10) checkAndUnlock('games_10');
+  if (stats.gamesPlayed >= 50) checkAndUnlock('games_50');
+  // 最大连击（用本局追踪的最大值，不受 mismatches 重置影响）
+  var maxC = state._maxComboThisGame || 0;
+  if (maxC > (stats.maxCombo || 0)) {
+    stats.maxCombo = maxC;
+  }
+  if (stats.maxCombo >= 5) checkAndUnlock('combo_5');
+  // 限时达人：单局匹配20对以上
+  if (state.isTimedMode && state._timedPairsMatched >= 20) checkAndUnlock('timed_20');
+  // 全部通关
+  var prog = loadProgress();
+  var unlockedCount = 0;
+  for (var i = 1; i <= 15; i++) { if ((prog[i] || 0) > 0) unlockedCount++; }
+  if (unlockedCount >= 15) checkAndUnlock('all_levels');
+  // 保存统计
+  saveAchievementStats(stats);
+}
+
+// ======================================
+// 每日挑战（日期种子关卡 + 打卡）
+// ======================================
+function getDailySeed(){
+  var d=new Date(),s=0;
+  s+=d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
+  return s;
+}
+function getDailyChallengeLevel(){
+  var seed=getDailySeed(), rng=seed;
+  function rnd(){ rng=(rng*1103515245+12345)&0x7fffffff; return rng/0x7fffffff; }
+  var rows=rnd()>0.5?4:5, cols=rnd()>0.5?4:5;
+  if(rows*cols%2!==0){ if(cols<6)cols++; else rows++; }
+  var time=Math.floor(60+rnd()*120);
+  return {id:0,name:'每日挑战',rows:rows,cols:cols,time:time,showPreview:rnd()>0.3,previewTime:rnd()>0.5?2200:1800,colorMode:['bright','warm','cold','rainbow'][Math.floor(rnd()*4)],stars:[0,0,0],isDaily:true};
+}
+function checkDailyStreak(){
+  var data=loadDailyStreak(),today=new Date().toDateString();
+  if(data.lastDate===today) return {done:true,streak:data.streak};
+  var yesterday=new Date(); yesterday.setDate(yesterday.getDate()-1);
+  if(data.lastDate===yesterday.toDateString()) data.streak++;
+  else data.streak=1;
+  data.lastDate=today; saveDailyStreak(data);
+  var bonus=0;
+  if(data.streak>=7)bonus=300; else if(data.streak>=3)bonus=100; else bonus=50;
+  return {done:false,streak:data.streak,bonus:bonus};
+}
+
+// ======================================
+// 全局状态
+// ======================================
+var state = {
+  phase:'MENU', coins:0, shopPhase:false, selectedCardBack:'cardback_classic',
+  cards:[], firstIdx:-1, secondIdx:-1,
+  score:0, moves:0, mistakes:0, matched:0, totalPairs:8,
+  timeLeft:0, combo:0, canInteract:false, timer:null,
+  animating:0, currentLevel:null, levelPage:0, previewEndTime:0,
+  powerUps:{peek:0,hint:0,freeze:0,shuffle:0}, activePowerUp:'',
+  // 新手引导：记录哪些道具已介绍过
+  _tutorial: { peek:false, hint:false, freeze:false, shuffle:false },
+  _tutorialPopup: null, // {key, name, icon, desc} 显示引导弹窗
+  // 成就系统
+  _achievementPopup: null, // {id,icon,name,desc} 成就解锁弹窗
+  _propsUsedThisGame: {},  // 本局使用过的道具
+  _achievementStats: null,  // 延迟加载
+  _maxComboThisGame: 0,     // 本局最大连击
+  _achPage: 0,              // 成就列表当前页码（每页6个）
+  isTimedMode: false,        // 是否限时模式
+  isDaily: false,           // 是否每日挑战
+  _timedPairsMatched: 0,      // 限时模式累计匹配对数
+  _coinReward: 0,            // 本局金币奖励（结算显示）
+  _dailyBonus: 0,            // 本局每日挑战连击奖励
+  _streak: 0                  // 本局打卡连击天数
+};
+
+// ======================================
+// 卡片类（含视觉优化）
+// ======================================
+function Card(id, pairId, x, y, w, h, color, symbol) {
+  this.id=id; this.pairId=pairId; this.x=x; this.y=y; this.w=w; this.h=h;
+  this.flipped=false; this.matched=false; this.animating=false;
+  this.animProgress=0; this.animDir=0; this.color=color;
+  this.symbol=symbol||'★'; // 卡片图案
+  // 3D透视翻转角度（模拟 rotateY）
+  this.flipAngle = 0;
+}
+Card.prototype.contains=function(mx,my){return mx>=this.x&&mx<=this.x+this.w&&my>=this.y&&my<=this.y+this.h;};
+Card.prototype.startFlip=function(open){this.animating=true;this.animDir=open?1:-1;state.animating++;};
+Card.prototype.update=function(dt){
+  if(!this.animating)return;
+  this.animProgress+=this.animDir*dt*3.5;
+  if(this.animProgress>=1){
+    this.animProgress=1;this.animating=false;this.flipped=true;this.animDir=0;this.flipAngle=0;state.animating--;
+  } else if(this.animProgress<=0){
+    this.animProgress=0;this.animating=false;this.flipped=false;this.animDir=0;this.flipAngle=0;state.animating--;
+  } else {
+    // 翻转角度：0→180度，在50%时达到90度（牌脊朝玩家）
+    this.flipAngle = this.animProgress * Math.PI;
+  }
+};
+Card.prototype.draw=function(ctx){
+  var cw=this.w, ch=this.h, cx=this.x+cw/2, cy=this.y+ch/2, p=this.animProgress;
+  // 3D透视：翻转时宽度按 cos(flipAngle) 缩放，模拟透视
+  var perspective = 0.08; // 透视强度
+  var angle = this.flipAngle;
+  var scaleX = Math.max(0.01, Math.abs(Math.cos(angle)));
+  // 近大远小：翻转中点时卡片略放大，增强3D感
+  var bulge = 1 + Math.sin(angle) * 0.06;
+  var isFront = p >= 0.5;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scaleX * bulge, bulge);
+  ctx.translate(-cx, -cy);
+
+  // --- 卡片阴影（落地阴影） ---
+  if (!this.matched) {
+    ctx.fillStyle = 'rgba(0,0,0,0.10)';
+    ctx.beginPath();
+    drawRoundRect(ctx, this.x + S(0.003), this.y + S(0.004), cw, ch, S(0.01));
+    ctx.fill();
+  }
+
+  // --- 卡片背景 ---
+  ctx.beginPath();
+  drawRoundRect(ctx, this.x, this.y, cw, ch, S(0.01));
+  if (this.matched) {
+    // 已匹配：绿色渐变
+    var grad = ctx.createLinearGradient(this.x, this.y, this.x, this.y + ch);
+    grad.addColorStop(0, '#7ED321');
+    grad.addColorStop(1, '#5CB015');
+    ctx.fillStyle = grad;
+    ctx.globalAlpha = 0.55;
+  } else if (isFront) {
+    // 正面：颜色渐变 + 高光
+    var grad = ctx.createLinearGradient(this.x, this.y, this.x, this.y + ch);
+    grad.addColorStop(0, this.color);
+    grad.addColorStop(1, this._darkenColor(this.color, 0.25));
+    ctx.fillStyle = grad;
+  } else {
+    // 背面：根据已装备卡背显示
+    ctx.fillStyle = getCardBackColor(state.selectedCardBack);
+    // 经典卡背用渐变，其他用纯色
+    if(state.selectedCardBack === 'cardback_classic'){
+      var g = ctx.createLinearGradient(this.x, this.y, this.x, this.y + this.h);
+      g.addColorStop(0, '#5B9BD5'); g.addColorStop(1, '#3A7BD5');
+      ctx.fillStyle = g;
+    }
+    // 卡背中央显示一个装饰符号
+    var backIcon = '';
+    if(state.selectedCardBack==='cardback_sakura') backIcon='🌸';
+    else if(state.selectedCardBack==='cardback_ocean') backIcon='🌊';
+    else if(state.selectedCardBack==='cardback_flame') backIcon='🔥';
+    else if(state.selectedCardBack==='cardback_starfield') backIcon='🌐';
+    else if(state.selectedCardBack==='cardback_diamond') backIcon='💎';
+    else if(state.selectedCardBack==='cardback_china') backIcon='🏆';
+    if(backIcon){
+      ctx.globalAlpha = 0.25;
+      ctx.font = sz(0.028)+'px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(backIcon, this.x+this.w/2, this.y+this.h/2);
+      ctx.globalAlpha = 1;
+    }
+  }
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // --- 卡片边框高光 ---
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = Math.max(1, S(0.001));
+  ctx.beginPath();
+  drawRoundRect(ctx, this.x + ctx.lineWidth/2, this.y + ctx.lineWidth/2, cw - ctx.lineWidth, ch - ctx.lineWidth, S(0.01));
+  ctx.stroke();
+
+  // --- 正面内容 ---
+  if (isFront && !this.matched && scaleX > 0.25) {
+    var displaySymbol = this.symbol || '★';
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold ' + sz(0.045) + 'px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.3)';
+    ctx.shadowBlur = S(0.002);
+    ctx.fillText(displaySymbol, cx, cy);
+    ctx.shadowColor = 'rgba(0,0,0,0)';
+  }
+
+  // --- 背面花纹 ---
+  if (!isFront && !this.matched && scaleX > 0.25) {
+    // 网格圆点
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    for (var r = 1; r < 4; r++) for (var c = 1; c < 3; c++) {
+      ctx.beginPath();
+      ctx.arc(this.x + cw * c / 3, this.y + ch * r / 4, S(0.0022), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // 问号
+    ctx.fillStyle = 'rgba(255,255,255,0.38)';
+    ctx.font = 'bold ' + sz(0.028) + 'px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('?', cx, cy);
+  }
+
+  // --- 已匹配打勾 ---
+  if (this.matched) {
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold ' + sz(0.032) + 'px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.2)';
+    ctx.shadowBlur = S(0.002);
+    ctx.fillText('✓', cx, cy);
+    ctx.shadowColor = 'rgba(0,0,0,0)';
+  }
+
+  ctx.restore();
+};
+// 辅助：颜色变暗
+Card.prototype._darkenColor = function(hex, amount) {
+  hex = hex.replace('#','');
+  var r = Math.max(0, Math.floor(parseInt(hex.substring(0,2),16) * (1-amount)));
+  var g = Math.max(0, Math.floor(parseInt(hex.substring(2,4),16) * (1-amount)));
+  var b = Math.max(0, Math.floor(parseInt(hex.substring(4,6),16) * (1-amount)));
+  return '#' + [r,g,b].map(function(v){return v.toString(16).padStart(2,'0');}).join('');
+};
+
+// 丰富的卡片图案库（60+ 高兼容符号，按主题分组，避免emoji字体兼容问题）
+var SYMBOLS = [
+  // 星光主题 0-9
+  '★','☆','✦','✧','✨','♦','♥','♣','♠','•',
+  // 几何主题 10-19
+  '■','▲','●','◆','□','△','○','◇','◐','◑',
+  // 箭头主题 20-29
+  '→','←','↑','↓','↗','↘','↙','↖','↔','↕',
+  // 数学主题 30-39
+  '∞','∑','∏','√','∆','∇','π','Ω','∫','∂',
+  // 自然主题 40-49
+  '☀','☁','☂','☃','☽','☾','❄','✿','❀','☘',
+  // 音乐主题 50-59
+  '♩','♪','♫','♬','♭','♮','♯','¶','§','†'
+];
+// 根据关卡选择图案子集（增加变化性）
+function getLevelSymbols(levelId) {
+  // 每3关换一个主题，增加新鲜感
+  var themeIndex = (levelId - 1) % 6;
+  var startIndex = themeIndex * 10;
+  var list = SYMBOLS.slice(startIndex, startIndex + 10);
+  // 如果主题图案不足，从完整列表补充
+  while (list.length < 10) {
+    list = list.concat(SYMBOLS.slice(0, 10 - list.length));
+  }
+  return list;
+}
+function drawRoundRect(ctx,x,y,w,h,r){
+  if(r>w/2)r=w/2; if(r>h/2)r=h/2;
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y);
+  ctx.quadraticCurveTo(x+w,y,x+w,y+r); ctx.lineTo(x+w,y+h-r);
+  ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h); ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r); ctx.lineTo(x,y+r);
+  ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+}
+function shuffle(arr){for(var i=arr.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=arr[i];arr[i]=arr[j];arr[j]=t;}}
+
+// ======================================
+// 棋盘生成
+// ======================================
+function createBoard(level){
+  state.cards=[]; state.firstIdx=-1; state.secondIdx=-1;
+  state.matched=0; state.moves=0; state.mistakes=0; state.score=0; state.combo=0; state.animating=0;
+  state.timeLeft=level.time; state.currentLevel=level;
+  var rows=level.rows, cols=level.cols, total=rows*cols; state.totalPairs=total/2;
+  var sz=fitCardSize(cols,rows), cardW=sz.w, cardH=sz.h, gap=sz.gap;
+
+  // ===== 符号分配：保证绝对不重复 =====
+  // 1. 收集所有可用符号（主题 + 全局），去重
+  var themeSymbols = getLevelSymbols(level.id);  // 当前主题符号
+  var seen = {};
+  var allUnique = [];
+  // 先加主题符号
+  for(var t=0; t<themeSymbols.length; t++){
+    if(!seen[themeSymbols[t]]){ seen[themeSymbols[t]]=true; allUnique.push(themeSymbols[t]); }
+  }
+  // 再从 SYMBOLS 补充不重复的符号
+  for(var s=0; s<SYMBOLS.length && allUnique.length < state.totalPairs; s++){
+    if(!seen[SYMBOLS[s]]){ seen[SYMBOLS[s]]=true; allUnique.push(SYMBOLS[s]); }
+  }
+  // 如果还不够（SYMBOLS 太小），用字母/数字补充
+  var fallbackIdx = 0;
+  var fallbacks = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('');
+  while(allUnique.length < state.totalPairs){
+    var fb = fallbacks[fallbackIdx % fallbacks.length] + (Math.floor(fallbackIdx / fallbacks.length) || '');
+    if(!seen[fb]){ seen[fb]=true; allUnique.push(fb); }
+    fallbackIdx++;
+  }
+  var pairSymbols = allUnique.slice(0, state.totalPairs);
+
+  var pairIds=[];
+  for(var i=0;i<state.totalPairs;i++)pairIds.push(i,i);
+  shuffle(pairIds);
+  var colors=getLevelColors(level);
+  var totalW=cols*cardW+(cols-1)*gap, totalH=rows*cardH+(rows-1)*gap;
+  var startX=(W-totalW)/2, startY=(H-totalH)/2 - S(0.035) + safeTop + S(0.035);
+  for(var i=0;i<total;i++){
+    var r=Math.floor(i/cols), c=i%cols;
+    var x=startX+c*(cardW+gap), y=startY+r*(cardH+gap);
+    var pairIndex = pairIds[i];
+    var cardSymbol = pairSymbols[pairIndex];
+    state.cards.push(new Card(i, pairIds[i], x, y, cardW, cardH, colors[pairIndex], cardSymbol));
+  }
+  initBgParticles();
+}
+
+// ======================================
+// 游戏流程
+// ======================================
+function cleanupGame(){
+  // 清理所有定时器，防止多局叠加导致越玩越卡
+  if(state.timer){ clearInterval(state.timer); state.timer=null; }
+  if(state._previewTimer){ clearTimeout(state._previewTimer); state._previewTimer=null; }
+  if(state._matchTimer){ clearTimeout(state._matchTimer); state._matchTimer=null; }
+  if(state._unflipTimer){ clearTimeout(state._unflipTimer); state._unflipTimer=null; }
+  // 清空特效粒子，避免跨关累积
+  burstParticles = [];
+  floatingTexts = [];
+  // 重置交互状态
+  state.firstIdx = -1;
+  state.secondIdx = -1;
+  state.canInteract = false;
+  state.previewEndTime = 0;
+}
+function usePowerUp(key){
+  // 只能在 PLAYING 阶段使用
+  if(state.phase!=='PLAYING')return;
+  // 新手引导：第一次使用时显示说明
+  if(!state._tutorial[key]){
+    var tutorials = {
+      peek:   {icon:'🔍', name:'偷看',   desc:'所有卡片会翻到正面3秒，\n趁机记住它们的位置！'},
+      hint:   {icon:'💡', name:'提示',   desc:'会高亮显示一对可匹配的卡片，\n帮你快速找到答案！'},
+      freeze: {icon:'⏱️', name:'冻结',   desc:'计时器暂停10秒，\n给你更多思考时间！'},
+      shuffle:{icon:'🔄', name:'洗牌',   desc:'未匹配的卡片会重新随机排列，\n打乱之前的记忆！'}
+    };
+    state._tutorialPopup = tutorials[key];
+    state._tutorialPopup.key = key;
+    return; // 不执行道具效果，等玩家点"知道了"
+  }
+  var cnt = state.powerUps[key]||0;
+  // 免费次数已用完
+  if(cnt<=0){
+    state._toast = {text: '本关次数已用完', time:Date.now()+2000};
+    return;
+  }
+  state.powerUps[key] = cnt - 1;
+  // 记录本局使用过该道具（成就追踪）
+  if (!state._propsUsedThisGame) state._propsUsedThisGame = {};
+  state._propsUsedThisGame[key] = true;
+
+  if(key==='peek'){
+    // 偷看：所有未匹配卡片翻到正面，3秒后翻回
+    state.cards.forEach(function(c){
+      if(!c.matched && !c.flipped){ c.startFlip(true); }
+    });
+    state._peekTimer = setTimeout(function(){
+      state.cards.forEach(function(c){
+        if(!c.matched && c.flipped && !c.animating){ c.startFlip(false); }
+      });
+    }, 3000);
+    AudioManager.play('page_turn');
+
+  } else if(key==='hint'){
+    // 提示：找到一对未匹配的卡片，高亮它们
+    var unmatched = [];
+    state.cards.forEach(function(c,i){ if(!c.matched) unmatched.push(i); });
+    // 找到一对
+    var found = null;
+    for(var i=0;i<unmatched.length&&!found;i++){
+      for(var j=i+1;j<unmatched.length&&!found;j++){
+        if(state.cards[unmatched[i]].pairId===state.cards[unmatched[j]].pairId){
+          found = [unmatched[i], unmatched[j]];
+        }
+      }
+    }
+    if(found){
+      state._hintPair = found;
+      state._hintEndTime = Date.now() + 2000;
+      AudioManager.play('button_click');
+    }
+
+  } else if(key==='freeze'){
+    // 冻结：暂停计时器10秒
+    state._freezeLeft = (state._freezeLeft||0) + 10;
+    if(state.timer){
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+    // 用特殊倒计时
+    state._freezeActive = true;
+    startTimer(); // 启动冻结倒计时
+    AudioManager.play('countdown_warn');
+
+  } else if(key==='shuffle'){
+    // 洗牌：将未匹配的卡片重新随机排列位置
+    var unmatchedCards = [];
+    state.cards.forEach(function(c){
+      if(!c.matched) unmatchedCards.push({pairId:c.pairId, color:c.color, symbol:c.symbol});
+    });
+    shuffle(unmatchedCards);
+    var idx=0;
+    state.cards.forEach(function(c){
+      if(!c.matched){
+        c.pairId = unmatchedCards[idx].pairId;
+        c.color = unmatchedCards[idx].color;
+        c.symbol = unmatchedCards[idx].symbol;
+        idx++;
+      }
+    });
+    AudioManager.play('page_turn');
+  }
+}
+
+// 道具效果在渲染时的处理（在 renderGame 中调用）
+function renderPowerUpEffects(ctx){
+  // 提示效果：高亮一对卡片
+  if(state._hintPair && state._hintEndTime > Date.now()){
+    state._hintPair.forEach(function(idx){
+      var c = state.cards[idx];
+      if(c && !c.matched){
+        ctx.save();
+        ctx.strokeStyle = '#FFD700';
+        ctx.lineWidth = S(0.004);
+        ctx.shadowColor = '#FFD700';
+        ctx.shadowBlur = S(0.006);
+        ctx.beginPath();
+        drawRoundRect(ctx, c.x-S(0.003), c.y-S(0.003), c.w+S(0.006), c.h+S(0.006), S(0.015));
+        ctx.stroke();
+        ctx.restore();
+      }
+    });
+  } else if(state._hintPair){
+    state._hintPair = null;
+  }
+  // 冻结效果：显示冻结图标
+  if(state._freezeActive && state._freezeLeft > 0){
+    ctx.fillStyle = 'rgba(0,188,212,0.7)';
+    ctx.font = 'bold '+sz(0.03)+'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('❄️ 冻结中 +'+state._freezeLeft+'s', W/2, safeTop + S(0.12));
+  }
+  // Toast 提示
+  if(state._toast && state._toast.time > Date.now()){
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.beginPath(); drawRoundRect(ctx, W/2-S(0.18), H*0.35, S(0.36), S(0.04), S(0.01));
+    ctx.fill();
+    ctx.fillStyle = 'white'; ctx.font = sz(0.018)+'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(state._toast.text, W/2, H*0.35+S(0.02));
+  } else if(state._toast){
+    state._toast = null;
+  }
+}
+// ======================================
+// 新手引导：道具说明弹窗
+// ======================================
+function renderTutorial(ctx){
+  if(!state._tutorialPopup) return;
+  var P = state._tutorialPopup;
+  // 半透明遮罩
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, 0, W, H);
+  // 弹窗背景
+  var pw = SW(0.78), ph = S(0.36);
+  var px = (W - pw)/2, py = (H - ph)/2;
+  ctx.fillStyle = '#23234a';
+  ctx.beginPath(); drawRoundRect(ctx, px, py, pw, ph, S(0.025));
+  ctx.fill();
+  // 边框
+  ctx.strokeStyle = '#FFD700'; ctx.lineWidth = S(0.003);
+  ctx.beginPath(); drawRoundRect(ctx, px, py, pw, ph, S(0.025));
+  ctx.stroke();
+  // 道具图标（大号）
+  ctx.fillStyle = '#FFD700'; ctx.font = sz(0.055)+'px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(P.icon, W/2, py + S(0.1));
+  // 道具名称
+  ctx.fillStyle = 'white'; ctx.font = 'bold '+sz(0.032)+'px sans-serif';
+  ctx.fillText(P.name, W/2, py + S(0.17));
+  // 说明文字（支持 \n 换行）
+  ctx.fillStyle = '#ccc'; ctx.font = sz(0.022)+'px sans-serif'; ctx.textAlign = 'center';
+  var lines = P.desc.split('\n');
+  var descY = py + S(0.24);
+  lines.forEach(function(line){
+    ctx.fillText(line, W/2, descY);
+    descY += S(0.032);
+  });
+  // "知道了" 按钮
+  var btnW = SW(0.4), btnH = S(0.048);
+  drawButton(ctx, W/2 - btnW/2, py + ph - S(0.065), btnW, btnH, '知道了', '#07c160', 'white', S(0.022));
+}
+// ======================================
+// 成就系统：解锁弹窗 + 成就列表页
+// ======================================
+function renderAchievementPopup(ctx) {
+  if (!state._achievementPopup) return;
+  var P = state._achievementPopup;
+  // 半透明遮罩
+  ctx.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx.fillRect(0, 0, W, H);
+  // 弹窗背景（金色主题）- 屏幕上方，不遮挡结算界面按钮
+  var pw = SW(0.72), ph = S(0.36);
+  var px = (W - pw)/2, py = safeTop + S(0.06);
+  // 外发光
+  ctx.shadowColor = '#FFD700';
+  ctx.shadowBlur = S(0.012);
+  ctx.fillStyle = '#2a1f00';
+  ctx.beginPath(); drawRoundRect(ctx, px, py, pw, ph, S(0.025));
+  ctx.fill();
+  ctx.shadowColor = 'rgba(0,0,0,0)';
+  // 金色边框
+  ctx.strokeStyle = '#FFD700'; ctx.lineWidth = S(0.004);
+  ctx.beginPath(); drawRoundRect(ctx, px, py, pw, ph, S(0.025));
+  ctx.stroke();
+  // 标题
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold ' + sz(0.022) + 'px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('🏆 成就解锁！', W/2, py + S(0.055));
+  // 成就图标（大号）
+  ctx.font = sz(0.055) + 'px sans-serif';
+  ctx.fillText(P.icon, W/2, py + S(0.14));
+  // 成就名称
+  ctx.fillStyle = 'white'; ctx.font = 'bold ' + sz(0.026) + 'px sans-serif';
+  ctx.fillText(P.name, W/2, py + S(0.205));
+  // 成就描述
+  ctx.fillStyle = '#ccc'; ctx.font = sz(0.018) + 'px sans-serif';
+  ctx.fillText(P.desc, W/2, py + S(0.25));
+  // 金币奖励
+  if (P.coinReward) {
+    ctx.fillStyle = '#FFD700'; ctx.font = 'bold ' + sz(0.022) + 'px sans-serif';
+    ctx.fillText('💰 +' + P.coinReward + ' 金币', W/2, py + S(0.30));
+  }
+  // "太棒了！" 按钮
+  var btnW = SW(0.40), btnH = S(0.042);
+  drawButton(ctx, W/2 - btnW/2, py + ph - S(0.058), btnW, btnH, '太棒了！', '#FFD700', '#1a1a2e', S(0.02));
+}
+function renderAchievements() {
+  // 背景
+  var bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#12121F');
+  bgGrad.addColorStop(0.5, '#1a1a2e');
+  bgGrad.addColorStop(1, '#0f0f1a');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  drawBgParticles(ctx);
+  // 标题
+  var titleY = safeTop + S(0.075);
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold ' + sz(0.042) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('🏆 成就', W/2, titleY);
+  // 统计
+  var unlockedCount = 0;
+  for (var ai = 0; ai < ACHIEVEMENTS.length; ai++) { if (isAchievementUnlocked(ACHIEVEMENTS[ai].id)) unlockedCount++; }
+  ctx.fillStyle = '#aaa'; ctx.font = sz(0.02) + 'px sans-serif';
+  ctx.fillText('已解锁 ' + unlockedCount + ' / ' + ACHIEVEMENTS.length, W/2, titleY + S(0.042));
+  // 分页
+  var PER_PAGE = 6;
+  var totalPages = Math.ceil(ACHIEVEMENTS.length / PER_PAGE);
+  var startIdx = state._achPage * PER_PAGE;
+  var endIdx = Math.min(startIdx + PER_PAGE, ACHIEVEMENTS.length);
+  // 成就列表
+  var listTop = safeTop + S(0.13);
+  var itemH = S(0.068);
+  var itemGap = S(0.008);
+  for (var i = startIdx; i < endIdx; i++) {
+    var ach = ACHIEVEMENTS[i];
+    var iy = listTop + (i - startIdx) * (itemH + itemGap);
+    var unlocked = isAchievementUnlocked(ach.id);
+    // 背景
+    ctx.fillStyle = unlocked ? '#23234a' : '#1a1a2e';
+    ctx.beginPath(); drawRoundRect(ctx, S(0.03), iy, W - S(0.06), itemH, S(0.012));
+    ctx.fill();
+    if (unlocked) {
+      ctx.strokeStyle = '#FFD700'; ctx.lineWidth = S(0.002);
+      ctx.beginPath(); drawRoundRect(ctx, S(0.03), iy, W - S(0.06), itemH, S(0.012));
+      ctx.stroke();
+    }
+    // 图标
+    ctx.font = sz(0.03) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(ach.icon, S(0.055), iy + itemH/2);
+    // 名称 + 描述
+    ctx.fillStyle = unlocked ? 'white' : '#555';
+    ctx.font = (unlocked ? 'bold ' : '') + sz(0.022) + 'px sans-serif';
+    ctx.fillText(ach.name, S(0.11), iy + itemH/2 - S(0.01));
+    ctx.fillStyle = unlocked ? '#aaa' : '#444';
+    ctx.font = sz(0.016) + 'px sans-serif';
+    ctx.fillText(ach.desc, S(0.11), iy + itemH/2 + S(0.016));
+    // 状态
+    ctx.textAlign = 'right';
+    if (unlocked) {
+      ctx.fillStyle = '#FFD700'; ctx.font = sz(0.02) + 'px sans-serif';
+      ctx.fillText('✓ 已解锁', W - S(0.045), iy + itemH/2);
+    } else {
+      ctx.fillStyle = '#444'; ctx.font = sz(0.018) + 'px sans-serif';
+      ctx.fillText('未解锁', W - S(0.045), iy + itemH/2);
+    }
+    ctx.textAlign = 'center';
+  }
+  // 页码指示
+  var pageY = H - S(0.11);
+  ctx.fillStyle = '#aaa'; ctx.font = sz(0.02) + 'px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('第 ' + (state._achPage + 1) + '/' + totalPages + ' 页', W/2, pageY);
+  // 上一页按钮
+  if (state._achPage > 0) {
+    var prevW = SW(0.25), prevH = S(0.04);
+    var prevX = W/2 - prevW - S(0.02), prevY = pageY + S(0.006);
+    drawButton(ctx, prevX, prevY, prevW, prevH, '◀ 上一页', '#444', 'white', prevH/2);
+  }
+  // 下一页按钮
+  if (state._achPage < totalPages - 1) {
+    var nextW = SW(0.25), nextH = S(0.04);
+    var nextX = W/2 + S(0.02), nextY = pageY + S(0.006);
+    drawButton(ctx, nextX, nextY, nextW, nextH, '下一页 ▶', '#444', 'white', nextH/2);
+  }
+  // 底部返回按钮
+  var backW = SW(0.18), backH = S(0.045);
+  var backX = S(0.03), backY = H - S(0.07);
+  drawButton(ctx, backX, backY, backW, backH, '◀ 返回', '#666', 'white', backH/2);
+}
+
+// ======================================
+// 商店系统渲染
+// ======================================
+function renderShop() {
+  // 背景
+  var bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#12121F');
+  bgGrad.addColorStop(0.5, '#1a1a2e');
+  bgGrad.addColorStop(1, '#0f0f1a');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  drawBgParticles(ctx);
+
+  // 标题
+  var titleY = safeTop + S(0.065);
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold ' + sz(0.036) + 'px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('🏪 商店', W/2, titleY);
+
+  // 金币显示
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold ' + sz(0.02) + 'px sans-serif';
+  ctx.fillText('💰 ' + state.coins, W/2, titleY + S(0.032));
+
+  // 商品列表
+  var itemsPerPage = 4;
+  var page = state._shopPage || 0;
+  var totalPages = Math.ceil(SHOP_ITEMS.length / itemsPerPage);
+  var startIdx = page * itemsPerPage;
+  var endIdx = Math.min(startIdx + itemsPerPage, SHOP_ITEMS.length);
+
+  var cardW = SW(0.72), cardH = S(0.088);
+  var cardGap = S(0.012);
+  var listTop = safeTop + S(0.13);
+
+  for (var i = startIdx; i < endIdx; i++) {
+    var item = SHOP_ITEMS[i];
+    var iy = listTop + (i - startIdx) * (cardH + cardGap);
+    var purchased = isItemPurchased(item.id);
+    var equipped = (item.type === 'cardback' && state.selectedCardBack === item.id);
+
+    // 卡片背景
+    ctx.fillStyle = equipped ? '#2a1f00' : (purchased ? '#1a1a2e' : '#12121F');
+    ctx.beginPath(); drawRoundRect(ctx, (W - cardW)/2, iy, cardW, cardH, S(0.012));
+    ctx.fill();
+    if (equipped) {
+      ctx.strokeStyle = '#FFD700'; ctx.lineWidth = S(0.003);
+      ctx.beginPath(); drawRoundRect(ctx, (W - cardW)/2, iy, cardW, cardH, S(0.012));
+      ctx.stroke();
+    }
+
+    // 图标
+    ctx.font = sz(0.03) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(item.icon, (W - cardW)/2 + S(0.025), iy + cardH/2);
+
+    // 名称
+    ctx.fillStyle = purchased ? 'white' : '#888';
+    ctx.font = (purchased ? 'bold ' : '') + sz(0.022) + 'px sans-serif';
+    ctx.fillText(item.name, (W - cardW)/2 + S(0.065), iy + cardH/2 - S(0.01));
+
+    // 价格/状态
+    ctx.textAlign = 'right';
+    if (purchased) {
+      if (equipped) {
+        ctx.fillStyle = '#FFD700'; ctx.font = sz(0.018) + 'px sans-serif';
+        ctx.fillText('✔ 已装备', (W + cardW)/2 - S(0.025), iy + cardH/2);
+      } else if (item.type === 'cardback') {
+        ctx.fillStyle = '#4CAF50'; ctx.font = sz(0.018) + 'px sans-serif';
+        ctx.fillText('点击装备', (W + cardW)/2 - S(0.025), iy + cardH/2);
+      } else {
+        ctx.fillStyle = '#666'; ctx.font = sz(0.018) + 'px sans-serif';
+        ctx.fillText('已拥有', (W + cardW)/2 - S(0.025), iy + cardH/2);
+      }
+    } else {
+      ctx.fillStyle = '#FFD700'; ctx.font = sz(0.02) + 'px sans-serif';
+      ctx.fillText('💰 ' + item.price, (W + cardW)/2 - S(0.025), iy + cardH/2);
+    }
+    ctx.textAlign = 'center';
+  }
+
+  // 翻页按钮
+  if (totalPages > 1) {
+    var pageBtnW = SW(0.24), pageBtnH = S(0.045);
+    if (page > 0) drawButton(ctx, W/2 - pageBtnW - SW(0.02), H - S(0.09), pageBtnW, pageBtnH, '◀ 上一页', '#4A90D9', 'white', S(0.022));
+    if (page < totalPages - 1) drawButton(ctx, W/2 + SW(0.02), H - S(0.09), pageBtnW, pageBtnH, '下一页 ▶', '#4A90D9', 'white', S(0.022));
+  }
+
+  // 底部返回按钮
+  var backW = SW(0.18), backH = S(0.045);
+  var backX = S(0.03), backY = H - S(0.07);
+  drawButton(ctx, backX, backY, backW, backH, '◀ 返回', '#666', 'white', backH/2);
+
+  // 装备预览（小卡片）
+  if (state.selectedCardBack !== 'cardback_classic') {
+    var pvX = W - S(0.18), pvY = H - S(0.11);
+    ctx.fillStyle = '#1a1a2e'; ctx.font = sz(0.016) + 'px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText('当前卡背', pvX, pvY);
+    // 画一个小卡片背面预览
+    var prevW = S(0.055), prevH = S(0.065);
+    var prevX = pvX - prevW, prevY = pvY + S(0.008);
+    ctx.fillStyle = getCardBackColor(state.selectedCardBack);
+    ctx.beginPath(); drawRoundRect(ctx, prevX, prevY, prevW, prevH, S(0.008));
+    ctx.fill();
+    ctx.strokeStyle = '#FFD700'; ctx.lineWidth = S(0.002);
+    ctx.beginPath(); drawRoundRect(ctx, prevX, prevY, prevW, prevH, S(0.008));
+    ctx.stroke();
+  }
+}
+
+// 获取卡背颜色
+function getCardBackColor(cardBackId) {
+  for (var i = 0; i < SHOP_ITEMS.length; i++) {
+    if (SHOP_ITEMS[i].id === cardBackId) return SHOP_ITEMS[i].color;
+  }
+  return '#1a1a2e';
+}
+
+function startGame(level){
+  if(!level)return;
+  cleanupGame();
+  state._propsUsedThisGame = {}; // 重置本局道具使用记录
+  state._maxComboThisGame = 0; // 重置本局最大连击
+  createBoard(level);
+  state.isDaily = !!level.isDaily;
+  // 初始化本关道具（每关开始时给予1次免费偷看/洗牌）
+  // 每关免费道具数量（难度越高，免费次数越多）
+  var levelId = level.id || 1;
+  state.powerUps = {
+    peek: levelId >= 10 ? 3 : 2,   // 高难度关给更多偷看次数
+    hint: levelId >= 10 ? 3 : 2,   // 高难度关给更多提示次数
+    freeze: levelId >= 8 ? 2 : 1,  // 第8关起给冻结次数
+    shuffle: 1                      // 洗牌每关1次
+  };
+  var hasPreview = level.showPreview && level.previewTime > 0;
+  AudioManager.setState(hasPreview ? 'SHOWING' : 'PLAYING');
+  if(hasPreview){
+    state.phase='SHOWING';
+    state.cards.forEach(function(c){c.startFlip(true);});
+    state.previewEndTime = Date.now() + level.previewTime;
+    state._previewTimer = setTimeout(function(){
+      if(state.phase!=='SHOWING')return; // 已被 cleanup 取消
+      state.cards.forEach(function(c){c.startFlip(false);});
+      AudioManager.play('card_unflip');
+      state._unflipTimer = setTimeout(function(){
+        if(state.phase!=='SHOWING')return;
+        state.phase='PLAYING';state.canInteract=true;startTimer();state.previewEndTime=0;AudioManager.setState('PLAYING');
+      },400);
+    },level.previewTime);
+  }else{state.phase='PLAYING';state.canInteract=true;startTimer();}
+}
+// ======================================
+// 限时模式
+// ======================================
+var TIMED_MODE_CONFIG = {
+  id: 'timed',
+  name: '限时模式',
+  cols: 4, rows: 4,
+  time: 90,           // 90秒倒计时
+  showPreview: false,
+  previewTime: 0,
+  stars: [500, 300, 100] // 用于兼容，实际不显示星星
+};
+function startTimedMode(){
+  cleanupGame();
+  state.isTimedMode = true;
+  state.isDaily = false;
+  state._timedPairsMatched = 0;
+  state._propsUsedThisGame = {};
+  state._maxComboThisGame = 0;
+  state.timeLeft = 90; // 90秒倒计时
+  state.powerUps = { peek:3, hint:3, freeze:1, shuffle:1 };
+  createBoard(TIMED_MODE_CONFIG);
+  state.phase = 'PLAYING';
+  state.canInteract = true;
+  startTimer();
+}
+function resetTimedBoard(){
+  // 限时模式下翻完8对，重建棋盘继续
+  // 重要：保存不重置的字段，createBoard 会把它们清掉
+  var savedTimeLeft = state.timeLeft;
+  var savedScore = state.score;
+  var savedMoves = state.moves;
+  var savedMistakes = state.mistakes;
+  var savedCombo = state.combo;
+  state.cards = [];
+  state.firstIdx = -1;
+  state.secondIdx = -1;
+  state.animating = 0;
+  createBoard(TIMED_MODE_CONFIG);
+  // 恢复跨棋盘持久化的字段
+  state.timeLeft = savedTimeLeft;
+  state.score = savedScore;
+  state.moves = savedMoves;
+  state.mistakes = savedMistakes;
+  state.combo = savedCombo;
+}
+function onCardClick(index){
+  if(!state.canInteract||state.phase!=='PLAYING')return;
+  var card=state.cards[index];if(!card||card.flipped||card.matched||card.animating)return;
+  card.startFlip(true);AudioManager.play('card_flip');tapFeedback();
+  if(state.firstIdx===-1){state.firstIdx=index;return;}
+  if(state.secondIdx===-1&&index!==state.firstIdx){state.secondIdx=index;state.moves++;state.canInteract=false;state.phase='CHECKING';state._matchTimer=setTimeout(checkMatch,350);}
+}
+function checkMatch(){
+  if(state.phase!=='CHECKING')return; // 已被 cleanup 取消
+  var c1=state.cards[state.firstIdx], c2=state.cards[state.secondIdx];
+  if(c1.pairId===c2.pairId){
+    state.combo++; state.matched++;
+    // 追踪本局最大连击
+    if(!state._maxComboThisGame)state._maxComboThisGame=0;
+    if(state.combo>state._maxComboThisGame)state._maxComboThisGame=state.combo;
+    var bonus = Math.min(state.combo * 10, 50);
+    state.score += 100 + bonus;
+    c1.matched=true; c2.matched=true;
+    AudioManager.play('card_match');
+    tapFeedback();
+    // 视觉反馈：粒子爆发 + 飘字
+    var cx1 = c1.x + c1.w/2, cy1 = c1.y + c1.h/2;
+    var cx2 = c2.x + c2.w/2, cy2 = c2.y + c2.h/2;
+    emitBurst(cx1, cy1, c1.color);
+    emitBurst(cx2, cy2, c2.color);
+    addFloatingText('+ ' + (100 + bonus), (cx1+cx2)/2, (cy1+cy2)/2 - S(0.02), '#FFD700');
+    if (state.combo > 1) {
+      AudioManager.play('combo');
+      triggerComboAnim(state.combo);
+      addFloatingText('连击 x' + state.combo, W/2, H*0.38, '#FFD700');
+    }
+    state.firstIdx=-1; state.secondIdx=-1;
+    if(state.matched>=state.totalPairs){
+      if(state.isTimedMode){
+        // 限时模式：翻完8对，重建棋盘继续
+        state._timedPairsMatched += state.totalPairs;
+        resetTimedBoard();
+        state.phase='PLAYING'; state.canInteract=true;
+      } else {
+        gameOver(true);
+      }
+    }
+    else{state.canInteract=true;state.phase='PLAYING';}
+  }else{
+    state.combo=0; state.mistakes++;
+    AudioManager.play('card_mismatch');
+    addFloatingText('✗', W/2, H*0.45, '#ff4444');
+    state._unflipTimer=setTimeout(function(){if(state.phase!=='CHECKING')return;c1.startFlip(false);c2.startFlip(false);state.firstIdx=-1;state.secondIdx=-1;state.canInteract=true;state.phase='PLAYING';},800);
+  }
+}
+function startTimer(){
+  clearInterval(state.timer);
+  // 冻结道具激活时，先倒数冻结时间，不减少 timeLeft
+  if(state._freezeActive && state._freezeLeft>0){
+    state.timer = setInterval(function(){
+      if(state.phase!=='PLAYING')return;
+      state._freezeLeft--;
+      if(state._freezeLeft<=0){clearInterval(state.timer);state._freezeActive=false;startTimer();}
+    },1000);
+    return;
+  }
+  state.timer=setInterval(function(){
+    if(state.phase!=='PLAYING')return;
+    state.timeLeft--;
+    if(state.timeLeft<=10&&state.timeLeft>0)AudioManager.play('countdown_warn');
+    if(state.timeLeft<=0)gameOver(false);
+  },1000);
+}
+function calculateStars(level){if(state.mistakes===0)return 3;if(state.score>=level.stars[0])return 3;if(state.score>=level.stars[1])return 2;return 1;}
+function gameOver(win){
+  cleanupGame();
+  state.canInteract=false;state.phase='OVER';
+  // 限时模式特殊处理
+  if(state.isTimedMode){
+    state.lastWin = true; // 限时模式 always "win"（显示得分）
+    state.lastStars = 0; // 限时模式无星星
+    // 金币奖励：每匹配5对奖励10金币
+    var coinReward = Math.floor(state._timedPairsMatched / 5) * 10;
+    if(coinReward > 0){
+      state._coinReward = coinReward;
+      state.coins += coinReward;
+      saveCoins(state.coins);
+    }
+    uploadScore(state.score);setupShare(state.score);
+    checkAchievementsAfterGame(true);
+    AudioManager.setState('OVER_WIN');
+    setTimeout(function(){AudioManager.play('level_up');},200);
+    return;
+  }
+  if(win)state.score+=Math.floor(state.timeLeft*10);
+  var stars=win?calculateStars(state.currentLevel):0;state.lastStars=stars;
+  if(win&&stars>0)saveProgress(state.currentLevel.id,stars);state.lastWin=win;
+  // 金币奖励
+  var coinReward = 0;
+  if(win){
+    coinReward = 10 * state.currentLevel.id; // 基础
+    if(stars>=1)coinReward += 10;
+    if(stars>=2)coinReward += 20;
+    if(stars>=3)coinReward += 50;
+    state._coinReward = coinReward;
+    state.coins += coinReward;
+    saveCoins(state.coins);
+  }
+  // 每日挑战打卡
+  if(state.isDaily && win){
+    var ds=checkDailyStreak();
+    if(ds.bonus>0){
+      state.coins += ds.bonus; saveCoins(state.coins);
+      state._dailyBonus = ds.bonus;
+      state._streak = ds.streak;
+    }
+  }
+  uploadScore(state.score);setupShare(state.score);
+  // 成就检测
+  checkAchievementsAfterGame(win);
+  // 音频反馈
+  if(win) {
+    AudioManager.setState('OVER_WIN');
+    setTimeout(function(){AudioManager.play('level_up');},200);
+    if(stars>0)setTimeout(function(){
+      for(var si=0;si<stars;si++)setTimeout(function(){AudioManager.play('star_earned');},si*250);
+    },600);
+  } else {
+    AudioManager.setState('OVER_LOSE');
+    AudioManager.play('game_over');
+  }
+}
+
+// ======================================
+// UI 渲染
+// ======================================
+var lastTime=0;
+var rAF = (typeof requestAnimationFrame !== 'undefined') ? requestAnimationFrame : function(cb){ return setTimeout(cb, 16); };
+function gameLoop(time){
+  var now = (time && time > 0) ? time : Date.now();
+  var dt=Math.min((now-lastTime)/1000,0.05);lastTime=now;
+  try {
+    // 更新所有动画（仅在游戏进行中才更新卡片）
+    if(state.phase==='PLAYING'||state.phase==='SHOWING'||state.phase==='CHECKING'){
+      if(Array.isArray(state.cards)){
+        state.cards.forEach(function(c){if(c&&c.update)c.update(dt);});
+      }
+    }
+    // 非游戏阶段清空残留卡片数据
+    else if(state.cards.length>0){
+      state.cards=[];
+      burstParticles=[];
+      floatingTexts=[];
+    }
+    updateBgParticles();
+    updateFloatingTexts();
+    updateBurstParticles();
+    updateComboAnim();
+    render();
+  } catch (e) {
+    if (typeof console !== 'undefined' && console.error) console.error('[gameLoop] error:', e);
+  }
+  rAF(gameLoop);
+}
+
+function render(){
+  try {
+    // 背景：深蓝紫渐变
+    var bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+    bgGrad.addColorStop(0, '#12121F');
+    bgGrad.addColorStop(0.5, '#1a1a2e');
+    bgGrad.addColorStop(1, '#0f0f1a');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, H);
+    // 背景光斑
+    drawBgParticles(ctx);
+
+    switch(state.phase){
+      case 'MENU': renderMenu(); break;
+      case 'LEVELS': renderLevels(); break;
+      case 'ACHIEVEMENTS': renderAchievements(); break;
+      case 'SHOP': renderShop(); break;
+      case 'SHOWING': case 'PLAYING': case 'CHECKING': renderGame(); break;
+      case 'OVER': renderOver(); break;
+    }
+    // 全局特效层
+    drawBurstParticles(ctx);
+    drawFloatingTexts(ctx);
+    drawComboAnim(ctx);
+    // 成就解锁弹窗（最上层，优先于新手引导）
+    if (state._achievementPopup) { renderAchievementPopup(ctx); return; }
+    // 新手引导弹窗
+    renderTutorial(ctx);
+  } catch (e) {
+    if (typeof console !== 'undefined' && console.error) console.error('[render] error:', e);
+  }
+}
+
+// --- 按钮绘制辅助（含悬浮效果） ---
+var touchHover = null; // {phase, x, y} 记录当前触摸位置
+wx.onTouchStart(function(res){
+  var t = (res.touches&&res.touches[0])||{x:0,y:0};
+  touchHover = { x: t.clientX!==undefined?t.clientX:(t.x||0), y: t.clientY!==undefined?t.clientY:(t.y||0) };
+});
+wx.onTouchMove(function(res){
+  var t = (res.touches&&res.touches[0])||{x:0,y:0};
+  touchHover = { x: t.clientX!==undefined?t.clientX:(t.x||0), y: t.clientY!==undefined?t.clientY:(t.y||0) };
+});
+wx.onTouchEnd(function(res){ touchHover = null; });
+
+function drawButton(ctx, x, y, w, h, text, bgColor, textColor, radius) {
+  radius = radius || h/2;
+  var hovered = touchHover && touchHover.x >= x && touchHover.x <= x+w && touchHover.y >= y && touchHover.y <= y+h;
+  var scale = hovered ? 1.04 : 1;
+  ctx.save();
+  ctx.translate(x + w/2, y + h/2);
+  ctx.scale(scale, scale);
+  ctx.translate(-(x + w/2), -(y + h/2));
+
+  // 按钮阴影
+  ctx.shadowColor = 'rgba(0,0,0,0.18)';
+  ctx.shadowBlur = S(0.004);
+  ctx.shadowOffsetY = S(0.002);
+
+  ctx.beginPath();
+  drawRoundRect(ctx, x, y, w, h, radius);
+  // 渐变按钮背景（容错：颜色格式异常时降级为纯色）
+  try {
+    var grad = ctx.createLinearGradient(x, y, x, y + h);
+    grad.addColorStop(0, bgColor);
+    grad.addColorStop(1, darkenColor(bgColor, 0.15));
+    ctx.fillStyle = grad;
+  } catch(e) {
+    ctx.fillStyle = bgColor;
+  }
+  ctx.fill();
+
+  ctx.shadowColor = 'rgba(0,0,0,0)';
+
+  // 高光条
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.beginPath();
+  drawRoundRect(ctx, x, y, w, h * 0.45, radius);
+  ctx.fill();
+
+  ctx.fillStyle = textColor || 'white';
+  ctx.font = 'bold ' + sz(0.02) + 'px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + w/2, y + h/2);
+  ctx.restore();
+}
+function darkenColor(hex, amount) {
+  hex = hex.replace('#','');
+  var r = Math.max(0, Math.floor(parseInt(hex.substring(0,2),16)*(1-amount)));
+  var g = Math.max(0, Math.floor(parseInt(hex.substring(2,4),16)*(1-amount)));
+  var b = Math.max(0, Math.floor(parseInt(hex.substring(4,6),16)*(1-amount)));
+  return '#'+[r,g,b].map(function(v){return v.toString(16).padStart(2,'0');}).join('');
+}
+
+function renderMenu(){
+  // 标题：渐变色
+  var titleY = H*0.18 + safeTop;
+  var titleGrad = ctx.createLinearGradient(W/2 - S(0.18), titleY - sz(0.058)/2, W/2 + S(0.18), titleY + sz(0.058)/2);
+  titleGrad.addColorStop(0, '#FFD700');
+  titleGrad.addColorStop(0.5, '#FFA94D');
+  titleGrad.addColorStop(1, '#FFD700');
+  ctx.fillStyle = titleGrad;
+  ctx.font = 'bold ' + sz(0.058) + 'px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#FFD700';
+  ctx.shadowBlur = S(0.008);
+  ctx.fillText('记忆翻牌大师', W/2, titleY);
+  ctx.shadowColor = 'rgba(0,0,0,0)';
+
+  ctx.fillStyle = '#aaa'; ctx.font = sz(0.024) + 'px sans-serif';
+  ctx.fillText('翻转卡片，配对所有图案', W/2, titleY + S(0.07));
+
+  // 开始按钮
+  var bw=SW(0.66), bh=S(0.065), bx=W/2-bw/2, by=H*0.42 + safeTop;
+  drawButton(ctx, bx, by, bw, bh, '选择关卡', '#07c160', 'white', bh/2);
+
+  // 每日挑战按钮
+  var dw=SW(0.5), dh=S(0.05), dpx=W/2-dw/2, dpy=by+bh+S(0.025);
+  var dstreak=loadDailyStreak(), today=new Date().toDateString(), done=dstreak.lastDate===today;
+  drawButton(ctx, dpx, dpy, dw, dh, (done?'✅ 今日已完成':'📅 每日挑战'), '#9C27B0', 'white', dh/2);
+  // 打卡天数
+  if(dstreak.streak>0){
+    ctx.fillStyle='#FFD700';ctx.font='bold '+sz(0.018)+'px sans-serif';ctx.textAlign='center';
+    ctx.fillText('连续打卡: '+dstreak.streak+' 天 🔥', W/2, dpy+dh+S(0.018));
+  }
+  // 成就按钮
+  var aw=SW(0.5), ah=S(0.045), apx=W/2-aw/2, apy=dpy+dh+S(0.025)+(dstreak.streak>0?S(0.018):0);
+  // 计算已解锁数，显示红点提示
+  var achCount=0; for(var ai=0;ai<ACHIEVEMENTS.length;ai++){if(isAchievementUnlocked(ACHIEVEMENTS[ai].id))achCount++;}
+  drawButton(ctx, apx, apy, aw, ah, '🏆 成就 ('+achCount+'/'+ACHIEVEMENTS.length+')', '#FFD700', '#1a1a2e', ah/2);
+
+  // 限时模式按钮
+  var tw=SW(0.5), th=S(0.045), tpx=W/2-tw/2, tpy=apy+ah+S(0.018);
+  drawButton(ctx, tpx, tpy, tw, th, '⏱ 限时模式', '#FF6B35', 'white', th/2);
+
+  // 商店按钮
+  var sw=SW(0.5), sh=S(0.045), spx=W/2-sw/2, spy=tpy+th+S(0.018);
+  var purchasedCount = loadPurchasedItems().length;
+  drawButton(ctx, spx, spy, sw, sh, '🏪 商店 (已购'+purchasedCount+')', '#FFD700', '#1a1a2e', sh/2);
+
+  try{var best=wx.getStorageSync('best_score')||0;}catch(e){best=0;}
+  if(best>0){ctx.fillStyle='#888';ctx.font=sz(0.022)+'px sans-serif';ctx.fillText('最高分: '+best,W/2,H*0.62+safeTop);}
+  // 金币显示
+  var coins = state.coins > 0 ? state.coins : loadCoins();
+  state.coins = coins;
+  ctx.fillStyle='#FFD700';ctx.font='bold '+sz(0.02)+'px sans-serif';ctx.textAlign='right';
+  ctx.fillText('💰 '+coins, W-S(0.03), H*0.62+safeTop+sz(0.03));
+  ctx.textAlign='center';
+  var unlocked=0;for(var i=1;i<=15;i++)if(isLevelUnlocked(i))unlocked++;
+  ctx.fillStyle='#666';ctx.font=sz(0.020)+'px sans-serif';ctx.fillText('已解锁 '+unlocked+' / 15 关',W/2,H*0.89+safeTop);
+}
+
+function renderLevels(){
+  try {
+    var titleTop = safeTop + S(0.075);
+    ctx.fillStyle='#FFD700';ctx.font='bold '+sz(0.046)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('选择关卡',W/2,titleTop);
+    var levelsPerPage=8,page=(state.levelPage>0)?state.levelPage:0,maxPage=Math.ceil(LEVELS.length/levelsPerPage)-1;
+    var start=page*levelsPerPage,end=Math.min(start+levelsPerPage,LEVELS.length);
+    var topY=safeTop + S(0.16),btnW=SW(0.72),btnH=S(0.068),gap=S(0.016);
+    for(var i=start;i<end;i++){
+      var idx=i-start,by=topY+idx*(btnH+gap),bx=W/2-btnW/2,level=LEVELS[i];
+      var unlocked=isLevelUnlocked(level.id),stars=getStars(level.id);
+      // 按钮背景
+      var bgColor = unlocked ? (i%2===0 ? '#2a2a4e' : '#22223e') : '#1a1a2e';
+      drawButton(ctx, bx, by, btnW, btnH,
+        (unlocked?'':'🔒 ') + level.id+'. '+level.name + (unlocked?'  '+'★'.repeat(stars)+'☆'.repeat(3-stars):''),
+        bgColor, unlocked?'#fff':'#555', S(0.012));
+    }
+    var pbY=topY+levelsPerPage*(btnH+gap)+S(0.03);
+    var pageBtnW=SW(0.24),pageBtnH=S(0.045);
+    if(page>0) drawButton(ctx,W/2-pageBtnW-SW(0.02),pbY,pageBtnW,pageBtnH,'◀ 上一页','#4A90D9','white',S(0.022));
+    if(page<maxPage) drawButton(ctx,W/2+SW(0.02),pbY,pageBtnW,pageBtnH,'下一页 ▶','#4A90D9','white',S(0.022));
+    // 底部左侧返回按钮
+    var backW = SW(0.18), backH = S(0.045);
+    var backX = S(0.03), backY = H - S(0.07);
+    drawButton(ctx, backX, backY, backW, backH, '◀ 返回', '#666', 'white', backH/2);
+  } catch(e) {
+    ctx.fillStyle='#ff4444';ctx.font='bold '+sz(0.02)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('LEVELS ERROR: '+e.message, W/2, H/2);
+  }
+}
+
+function renderGame(){
+  var hudTop = safeTop + S(0.05); // 整体下移，避开刘海/前置摄像头
+  // 返回按钮尺寸（与 handleTap 保持一致）
+  var backW = SW(0.15), backH = S(0.038);
+  var backX = W - backW - S(0.012), backY = hudTop + S(0.016);
+  // HUD 背景
+  var hudGrad = ctx.createLinearGradient(0, hudTop, 0, hudTop + S(0.07));
+  hudGrad.addColorStop(0, '#0000008c');
+  hudGrad.addColorStop(1, '#00000000');
+  ctx.fillStyle = hudGrad;
+  ctx.fillRect(0, hudTop, W, S(0.07));
+
+  ctx.fillStyle='white';ctx.font=sz(0.018)+'px sans-serif';ctx.textAlign='left';ctx.textBaseline='middle';
+  ctx.fillText('分数: '+state.score,S(0.02),hudTop+S(0.035));
+  // 限时模式 HUD
+  if(state.isTimedMode){
+    ctx.fillStyle='#FF6B35';ctx.font='bold '+sz(0.016)+'px sans-serif';ctx.textAlign='left';
+    ctx.fillText('⏱ 限时模式',S(0.02),hudTop+S(0.058));
+    ctx.textAlign='center';ctx.fillStyle=state.timeLeft<=10?'#ff4444':'white';ctx.font='bold '+sz(0.024)+'px sans-serif';
+    var min=Math.floor(state.timeLeft/60),sec=state.timeLeft%60;
+    ctx.fillText(min+':'+String(sec).padStart(2,'0'),W/2,hudTop+S(0.035));
+    ctx.fillStyle='#FFD700';ctx.font=sz(0.016)+'px sans-serif';ctx.textAlign='right';
+    ctx.fillText('累计: '+state._timedPairsMatched+' 对',backX-S(0.012),hudTop+S(0.035));
+    ctx.textAlign='right';ctx.fillStyle='#aaa';ctx.font=sz(0.014)+'px sans-serif';
+    ctx.fillText('本局: '+state.matched+'/'+state.totalPairs,backX-S(0.012),hudTop+S(0.058));
+  } else {
+    ctx.textAlign='center';var min=Math.floor(state.timeLeft/60),sec=state.timeLeft%60;
+    ctx.fillStyle=state.timeLeft<=30?'#ff4444':'white';ctx.font='bold '+sz(0.024)+'px sans-serif';
+    ctx.fillText(min+':'+String(sec).padStart(2,'0'),W/2,hudTop+S(0.035));
+    ctx.textAlign='right';ctx.fillStyle='white';ctx.font=sz(0.018)+'px sans-serif';
+    ctx.fillText('尝试: '+state.moves,backX-S(0.012),hudTop+S(0.035));
+  }
+
+  // 返回按钮 — OVER 界面有自己的按钮，不重复显示
+  if(state.phase!=='OVER'){
+    drawButton(ctx, backX, backY, backW, backH, '◀ 退出', '#993333', 'white', backH/2);
+  }
+
+  // 连击显示（静态，配合动画）
+  if(state.combo>1){
+    ctx.fillStyle='#FFD700';ctx.font='bold '+sz(0.02)+'px sans-serif';ctx.textAlign='center';
+    ctx.fillText('连击 x'+state.combo,W/2,hudTop+S(0.1));
+  }
+
+  // ===== 道具栏（游戏界面底部）=====
+  if(state.phase==='PLAYING'||state.phase==='SHOWING'){
+    var pw=S(0.072), ph=S(0.04), px=W/2-pw*2-S(0.008), py=H-S(0.065);
+    var icons=['🔍','💡','⏱️','🔄'];
+    var keys=['peek','hint','freeze','shuffle'];
+    var names=['偷看','提示','冻结','洗牌'];
+    var colors=['#4A90D9','#FFA94D','#00BCD4','#9C27B0'];
+    for(var i=0;i<4;i++){
+      var bx=px+i*(pw+S(0.008)), have=state.powerUps[keys[i]]||0;
+      // 按钮背景
+      ctx.fillStyle=have>0?colors[i]:'#333';
+      ctx.beginPath(); drawRoundRect(ctx,bx,py,pw,ph,ph*0.3); ctx.fill();
+      // 图标+数量
+      ctx.fillStyle=have>0?'white':'#777'; ctx.font=sz(0.018)+'px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(icons[i]+(have>0?'×'+have:''), bx+pw/2, py+ph/2);
+      // 记录点击区域（供 handleTap 使用）
+    }
+    // 金币显示（右下角）
+    ctx.fillStyle='#FFD700'; ctx.font='bold '+sz(0.018)+'px sans-serif'; ctx.textAlign='right'; ctx.textBaseline='middle';
+    ctx.fillText('💰'+state.coins, W-S(0.02), py+ph/2);
+    ctx.textAlign='center';
+  }
+
+  state.cards.forEach(function(c){c.draw(ctx);});
+  // 道具特效渲染（提示高亮、冻结图标、Toast）
+  if(state.phase==='PLAYING') renderPowerUpEffects(ctx);
+
+  // 预览阶段倒计时
+  if(state.phase==='SHOWING'&&state.previewEndTime){
+    var remaining=Math.max(0,Math.ceil((state.previewEndTime-Date.now())/1000));
+    ctx.fillStyle='rgba(0,0,0,0.6)';ctx.fillRect(0,hudTop,W,S(0.07));
+    ctx.fillStyle='#FFD700';ctx.font='bold '+sz(0.024)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('记住位置!  '+remaining+'s',W/2,hudTop+S(0.035));
+    // 预览阶段也显示返回按钮
+    if(state.phase!=='OVER') drawButton(ctx, backX, backY, backW, backH, '◀ 退出', '#993333', 'white', backH/2);
+  }
+}
+
+function getOverButtonLayout(){
+  // 与 renderOver() 完全一致的按钮位置计算
+  var cx=W/2;
+  var topY = H * 0.22;
+  var lineHeight = S(0.044);
+  var y = topY + S(0.058) + S(0.065); // 标题 + 星星 + 得分
+  y += lineHeight; // 用时
+  y += lineHeight; // 错误
+  if(state._coinReward>0) y += lineHeight;
+  y += lineHeight; // 总金币
+  if(state._dailyBonus>0) y += lineHeight;
+
+  var btnW=SW(0.42),btnH=S(0.048),btnGap=S(0.012);
+  var btnBottomY = Math.max(y + S(0.035), H * 0.68);
+  if(btnBottomY + btnH*2 + S(0.02) > H - safeTop - S(0.02)){
+    btnBottomY = H - safeTop - btnH*2 - S(0.04);
+  }
+  return { cx:cx, btnW:btnW, btnH:btnH, btnGap:btnGap, btnBottomY:btnBottomY };
+}
+
+function renderOver(){
+  renderGame();
+  // 遮罩
+  ctx.fillStyle='rgba(0,0,0,0.78)';ctx.fillRect(0,0,W,H);
+  var cx=W/2;
+  // 整体内容区
+  var topY = H * 0.22;
+  var lineHeight = S(0.044); // 每行固定间距
+
+  // 限时模式特殊显示
+  if(state.isTimedMode){
+    // 标题
+    ctx.fillStyle='#FF6B35';ctx.font='bold '+sz(0.044)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('时间到!',cx,topY);
+    // 数据区
+    var y = topY + S(0.065);
+    // 总配对数
+    ctx.fillStyle='#FFD700';ctx.font='bold '+sz(0.03)+'px sans-serif';
+    ctx.fillText('累计配对: '+state._timedPairsMatched+' 对',cx,y);
+    y += lineHeight;
+    // 得分
+    ctx.fillStyle='white';ctx.font='bold '+sz(0.03)+'px sans-serif';
+    ctx.fillText('得分: '+state.score,cx,y);
+    y += lineHeight;
+    // 最大连击
+    var stats = getAchStats();
+    ctx.fillStyle='#aaa';ctx.font=sz(0.024)+'px sans-serif';
+    ctx.fillText('最大连击: '+(stats.maxCombo||0)+'x',cx,y);
+    y += lineHeight;
+    // 金币奖励
+    if(state._coinReward>0){
+      ctx.fillStyle='#FFD700';ctx.font='bold '+sz(0.024)+'px sans-serif';
+      ctx.fillText('💰 +'+state._coinReward+' 金币',cx,y);
+      y += lineHeight;
+    }
+    // 当前金币总数
+    ctx.fillStyle='#999';ctx.font=sz(0.018)+'px sans-serif';
+    ctx.fillText('总金币: '+state.coins,cx,y);
+    y += lineHeight;
+    // 按钮区域
+    var L = getOverButtonLayout();
+    drawButton(ctx,cx-L.btnW/2,L.btnBottomY,L.btnW,L.btnH,'再来一局','#FF6B35','white',S(0.022));
+    drawButton(ctx,cx-SW(0.12),L.btnBottomY+L.btnH+S(0.016),SW(0.24),S(0.036),'主页','#444','#aaa',S(0.017));
+    return;
+  }
+
+  // 过关标题
+  ctx.fillStyle=state.lastWin?'#4CAF50':'#ff4444';
+  ctx.font='bold '+sz(0.044)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(state.lastWin?'过关!':'时间到!',cx,topY);
+
+  // 星星（标题下方）
+  var st=state.lastStars||0,starText='';
+  for(var i=0;i<3;i++)starText+=i<st?'★':'☆';
+  var y = topY + S(0.058);
+  ctx.font=sz(0.048)+'px sans-serif';
+  ctx.fillStyle='#FFD700';
+  ctx.fillText(starText,cx,y);
+
+  // ===== 数据区：每行一项，竖向排列，永不重叠 =====
+  y += S(0.065);
+
+  // 得分
+  ctx.fillStyle='white';ctx.font='bold '+sz(0.03)+'px sans-serif';
+  ctx.fillText('得分: '+state.score,cx,y);
+  y += lineHeight;
+
+  // 用时
+  var used=(state.currentLevel.time||60)-state.timeLeft,um=Math.floor(used/60),us=used%60;
+  ctx.fillStyle='#ccc';ctx.font=sz(0.024)+'px sans-serif';
+  ctx.fillText('用时: '+um+'分'+String(us).padStart(2,'0')+'秒',cx,y);
+  y += lineHeight;
+
+  // 错误次数
+  ctx.fillStyle='#ff8888';ctx.font=sz(0.024)+'px sans-serif';
+  ctx.fillText('错误: '+state.mistakes+' 次',cx,y);
+  y += lineHeight;
+
+  // 金币奖励
+  if(state._coinReward>0){
+    ctx.fillStyle='#FFD700';ctx.font='bold '+sz(0.024)+'px sans-serif';
+    ctx.fillText('💰 +'+state._coinReward+' 金币',cx,y);
+    y += lineHeight;
+  }
+
+  // 当前金币总数
+  ctx.fillStyle='#999';ctx.font=sz(0.018)+'px sans-serif';
+  ctx.fillText('总金币: '+state.coins,cx,y);
+  y += lineHeight;
+
+  // 每日挑战打卡奖励
+  if(state._dailyBonus>0){
+    ctx.fillStyle='#4CAF50';ctx.font='bold '+sz(0.02)+'px sans-serif';
+    ctx.fillText('🔥 连续打卡 '+state._streak+'天! 奖励 +'+state._dailyBonus+'金币',cx,y);
+    y += lineHeight;
+  }
+
+  // ===== 按钮区域：根据内容动态定位，保证不重叠 =====
+  var L = getOverButtonLayout();
+  var isDaily = state.isDaily;
+  if(state.lastWin&&!isDaily&&state.currentLevel.id>0&&state.currentLevel.id<LEVELS.length){
+    drawButton(ctx,cx-L.btnW/2,L.btnBottomY,L.btnW,L.btnH,'下一关 ▶','#07c160','white',S(0.022));
+  } else {
+    var halfBtnW=(L.btnW-L.btnGap)/2;
+    drawButton(ctx,cx-halfBtnW-L.btnGap/2,L.btnBottomY,halfBtnW,L.btnH,'重试','#07c160','white',S(0.022));
+    // 每日挑战：失败/通关后右侧按钮都显示"主页"
+    var rightLabel = isDaily ? '主页' : '关卡';
+    drawButton(ctx,cx+L.btnGap/2,L.btnBottomY,halfBtnW,L.btnH,rightLabel,'#666','white',S(0.022));
+  }
+  drawButton(ctx,cx-SW(0.12),L.btnBottomY+L.btnH+S(0.016),SW(0.24),S(0.036),'主页','#444','#aaa',S(0.017));
+}
+
+// ======================================
+// 触控
+// ======================================
+wx.onTouchEnd(function(res){
+  // 首次触摸时初始化音频（用户手势后才允许 AudioContext resume）
+  if (!_audioInited) {
+    _audioInited = true;
+    AudioManager.init();
+    AudioManager.setState('MENU');
+  }
+  var t=(res.changedTouches&&res.changedTouches[0])||(res.touches&&res.touches[0])||{x:0,y:0};
+  handleTap(t.clientX!==undefined?t.clientX:(t.x||0),t.clientY!==undefined?t.clientY:(t.y||0));
+});
+function handleTap(tx,ty){
+  // 成就解锁弹窗点击检测（最上层，优先处理）
+  if(state._achievementPopup){
+    var pw2=SW(0.72), ph2=S(0.32), px2=(W-pw2)/2, py2=safeTop+S(0.06);
+    var btnW2=SW(0.40), btnH2=S(0.042);
+    var btnX2=W/2-btnW2/2, btnY2=py2+ph2-S(0.058);
+    if(tx>=btnX2&&tx<=btnX2+btnW2&&ty>=btnY2&&ty<=btnY2+btnH2){
+      state._achievementPopup=null; tapFeedback();
+      return;
+    }
+    return; // 弹窗显示时，其他点击忽略
+  }
+  // 新手引导弹窗点击检测
+  if(state._tutorialPopup){
+    var pw=SW(0.78), ph=S(0.36), px=(W-pw)/2, py=(H-ph)/2;
+    var btnW=SW(0.4), btnH=S(0.048);
+    var btnX=W/2-btnW/2, btnY=py+ph-S(0.065);
+    if(tx>=btnX&&tx<=btnX+btnW&&ty>=btnY&&ty<=btnY+btnH){
+      // 点"知道了"：标记已介绍，清弹窗，执行道具
+      state._tutorial[state._tutorialPopup.key] = true;
+      var key = state._tutorialPopup.key;
+      state._tutorialPopup = null;
+      // 延迟一帧再执行道具，避免弹窗还在
+      setTimeout(function(){ usePowerUp(key); }, 50);
+    }
+    return; // 弹窗显示时，其他点击全部忽略
+  }
+  if(state.phase==='MENU'){
+    var bw=SW(0.66), bh=S(0.065), bx=W/2-bw/2, by=H*0.42+safeTop;
+    if(tx>=bx&&tx<=bx+bw&&ty>=by&&ty<=by+bh){AudioManager.play('button_click');tapFeedback();state.phase='LEVELS';state.levelPage=0;AudioManager.setState('MENU');}
+    // 每日挑战按钮
+    var dw=SW(0.5), dh=S(0.05), dpx=W/2-dw/2, dpy=by+bh+S(0.025);
+    if(tx>=dpx&&tx<=dpx+dw&&ty>=dpy&&ty<=dpy+dh){
+      AudioManager.play('button_click');tapFeedback();
+      state.isDaily=true; startGame(getDailyChallengeLevel());
+      return;
+    }
+    // 成就按钮
+    var aw=SW(0.5), ah=S(0.045);
+    var apx=W/2-aw/2, apy=dpy+dh+S(0.025)+(loadDailyStreak().streak>0?S(0.018):0);
+    if(tx>=apx&&tx<=apx+aw&&ty>=apy&&ty<=apy+ah){
+      AudioManager.play('button_click');tapFeedback();
+      state._achPage = 0; state.phase='ACHIEVEMENTS'; return;
+    }
+    // 限时模式按钮
+    var tw=SW(0.5), th=S(0.045), tpx=W/2-tw/2, tpy=apy+ah+S(0.018);
+    if(tx>=tpx&&tx<=tpx+tw&&ty>=tpy&&ty<=tpy+th){
+      AudioManager.play('button_click');tapFeedback();
+      startTimedMode(); return;
+    }
+    // 商店按钮
+    var sw=SW(0.5), sh=S(0.045), spx=W/2-sw/2, spy=tpy+th+S(0.018);
+    if(tx>=spx&&tx<=spx+sw&&ty>=spy&&ty<=spy+sh){
+      AudioManager.play('button_click');tapFeedback();
+      state.phase='SHOP'; return;
+    }
+    return;
+  }
+  if(state.phase==='ACHIEVEMENTS'){
+    // 成就页：翻页按钮 + 返回按钮
+    var PER_PAGE = 6, totalPages = Math.ceil(ACHIEVEMENTS.length / PER_PAGE);
+    var pageY = H - S(0.11);
+    // 上一页
+    if (state._achPage > 0) {
+      var prevW = SW(0.25), prevH = S(0.04);
+      var prevX = W/2 - prevW - S(0.02), prevY = pageY + S(0.006);
+      if(tx>=prevX&&tx<=prevX+prevW&&ty>=prevY&&ty<=prevY+prevH){
+        AudioManager.play('button_click');tapFeedback();
+        state._achPage--; return;
+      }
+    }
+    // 下一页
+    if (state._achPage < totalPages - 1) {
+      var nextW = SW(0.25), nextH = S(0.04);
+      var nextX = W/2 + S(0.02), nextY = pageY + S(0.006);
+      if(tx>=nextX&&tx<=nextX+nextW&&ty>=nextY&&ty<=nextY+nextH){
+        AudioManager.play('button_click');tapFeedback();
+        state._achPage++; return;
+      }
+    }
+    // 底部左侧返回按钮
+    var backW = SW(0.18), backH = S(0.045);
+    var backX = S(0.03), backY = H - S(0.07);
+    if(tx>=backX&&tx<=backX+backW&&ty>=backY&&ty<=backY+backH){
+      AudioManager.play('button_click');tapFeedback();
+      state.phase='MENU'; return;
+    }
+  // ===== 商店页面交互 =====
+  if(state.phase==='SHOP'){
+    var itemsPerPage=4, page=state._shopPage||0;
+    var startIdx=page*itemsPerPage, endIdx=Math.min(startIdx+itemsPerPage,SHOP_ITEMS.length);
+    var cardW=SW(0.72), cardH=S(0.088), cardGap=S(0.012);
+    var listTop=safeTop+S(0.13);
+    // 检测点击商品
+    for(var i=startIdx;i<endIdx;i++){
+      var iy=listTop+(i-startIdx)*(cardH+cardGap);
+      if(tx>=(W-cardW)/2 && tx<=(W+cardW)/2 && ty>=iy && ty<=iy+cardH){
+        AudioManager.play('button_click');tapFeedback();
+        var item=SHOP_ITEMS[i];
+        if(isItemPurchased(item.id)){
+          if(item.type==='cardback'){ state.selectedCardBack=item.id; saveShopState(); }
+        } else {
+          var result=purchaseItem(item.id);
+          state._shopMsg=result.msg;
+          setTimeout(function(){state._shopMsg=null;},1200);
+        }
+        return;
+      }
+    }
+    // 翻页按钮
+    if(page>0){
+      var pageBtnW=SW(0.24), pageBtnH=S(0.045);
+      var prevX=W/2-pageBtnW-SW(0.02), pageY=H-S(0.09);
+      if(tx>=prevX&&tx<=prevX+pageBtnW&&ty>=pageY&&ty<=pageY+pageBtnH){
+        AudioManager.play('button_click');tapFeedback();
+        state._shopPage--; return;
+      }
+    }
+    if(page<Math.ceil(SHOP_ITEMS.length/itemsPerPage)-1){
+      var pageBtnW=SW(0.24), pageBtnH=S(0.045);
+      var nextX=W/2+SW(0.02), pageY=H-S(0.09);
+      if(tx>=nextX&&tx<=nextX+pageBtnW&&ty>=pageY&&ty<=pageY+pageBtnH){
+        AudioManager.play('button_click');tapFeedback();
+        state._shopPage++; return;
+      }
+    }
+    // 返回按钮
+    var backW=SW(0.18), backH=S(0.045);
+    var backX=S(0.03), backY=H-S(0.07);
+    if(tx>=backX&&tx<=backX+backW&&ty>=backY&&ty<=backY+backH){
+      AudioManager.play('button_click');tapFeedback();
+      state.phase='MENU'; return;
+    }
+    return;
+  }
+
+    return;
+  }
+  if(state.phase==='LEVELS'){
+    var levelsPerPage=8,page=state.levelPage,topY=safeTop+S(0.16),btnH=S(0.068),gap=S(0.016),btnW=SW(0.72),bx=W/2-btnW/2;
+    var start=page*levelsPerPage,end=Math.min(start+levelsPerPage,LEVELS.length);
+    for(var i=start;i<end;i++){var by=topY+(i-start)*(btnH+gap);if(tx>=bx&&tx<=bx+btnW&&ty>=by&&ty<=by+btnH){if(isLevelUnlocked(LEVELS[i].id)){AudioManager.play('button_click');tapFeedback();startGame(LEVELS[i]);}return;}}
+    var pbY=topY+levelsPerPage*(btnH+gap)+S(0.03);
+    var pageBtnW=SW(0.24),pageBtnH=S(0.045);
+    if(page>0&&tx>=W/2-pageBtnW-SW(0.02)&&tx<=W/2-SW(0.02)&&ty>=pbY&&ty<=pbY+pageBtnH){AudioManager.play('page_turn');tapFeedback();state.levelPage--;return;}
+    var maxPage=Math.ceil(LEVELS.length/levelsPerPage)-1;
+    if(page<maxPage&&tx>=W/2+SW(0.02)&&tx<=W/2+SW(0.02)+pageBtnW&&ty>=pbY&&ty<=pbY+pageBtnH){AudioManager.play('page_turn');tapFeedback();state.levelPage++;return;}
+    // 底部左侧返回按钮
+    var backW = SW(0.18), backH = S(0.045);
+    var backX = S(0.03), backY = H - S(0.07);
+    if(tx>=backX&&tx<=backX+backW&&ty>=backY&&ty<=backY+backH){AudioManager.play('button_click');tapFeedback();state.phase='MENU';AudioManager.setState('MENU');return;}
+    return;
+  }
+  if(state.phase==='OVER'){
+    var L = getOverButtonLayout();
+    var level=state.currentLevel;
+    var isDaily = state.isDaily; // 每日挑战中
+
+    // 限时模式特殊按钮处理
+    if(state.isTimedMode){
+      // "再来一局" 按钮
+      if(tx>=L.cx-L.btnW/2 && tx<=L.cx+L.btnW/2 && ty>=L.btnBottomY && ty<=L.btnBottomY+L.btnH){
+        cleanupGame(); tapFeedback(); startTimedMode(); return;
+      }
+      // "主页" 按钮（第二行）
+      var homeY = L.btnBottomY + L.btnH + S(0.016);
+      var homeW = SW(0.24), homeH = S(0.036);
+      var homeX = L.cx - homeW/2;
+      if(tx>=homeX && tx<=homeX+homeW && ty>=homeY && ty<=homeY+homeH){
+        cleanupGame(); tapFeedback();
+        state.phase='MENU'; state.isTimedMode=false;
+        AudioManager.setState('MENU'); return;
+      }
+      return;
+    }
+
+    if(state.lastWin && !isDaily && level.id>0 && level.id<LEVELS.length){
+      // 普通关卡过关 → 下一关
+      if(tx>=L.cx-L.btnW/2 && tx<=L.cx+L.btnW/2 && ty>=L.btnBottomY && ty<=L.btnBottomY+L.btnH){
+        cleanupGame(); tapFeedback(); startGame(LEVELS[level.id]); return;
+      }
+    } else {
+      // 失败 或 每日挑战 → 重试 + 关卡/主页
+      var halfBtnW=(L.btnW-L.btnGap)/2;
+      // 重试按钮
+      if(tx>=L.cx-halfBtnW-L.btnGap/2 && tx<=L.cx-halfBtnW-L.btnGap/2+halfBtnW && ty>=L.btnBottomY && ty<=L.btnBottomY+L.btnH){
+        cleanupGame(); tapFeedback();
+        if(isDaily){
+          state.isDaily=true; startGame(getDailyChallengeLevel()); // 重玩今日挑战
+        } else {
+          startGame(level);
+        }
+        return;
+      }
+      // 关卡/主页按钮（每日挑战回到主页，普通关回到关卡选择）
+      if(tx>=L.cx+L.btnGap/2 && tx<=L.cx+L.btnGap/2+halfBtnW && ty>=L.btnBottomY && ty<=L.btnBottomY+L.btnH){
+        cleanupGame(); tapFeedback();
+        if(isDaily){
+          state.phase='MENU'; AudioManager.setState('MENU');
+        } else {
+          state.phase='LEVELS'; state.levelPage=Math.max(0,Math.floor((level.id-1)/8));
+          AudioManager.setState('MENU');
+        }
+        return;
+      }
+    }
+    // 主页按钮（第二行）
+    var homeY = L.btnBottomY + L.btnH + S(0.016);
+    var homeW = SW(0.24), homeH = S(0.036);
+    var homeX = L.cx - homeW/2;
+    if(tx>=homeX && tx<=homeX+homeW && ty>=homeY && ty<=homeY+homeH){
+      cleanupGame(); tapFeedback();
+      state.phase='MENU'; state.isDaily=false;
+      AudioManager.setState('MENU'); return;
+    }
+    return;
+  }
+  if(state.phase==='PLAYING'||state.phase==='SHOWING'||state.phase==='CHECKING'){
+    // 道具栏点击检测（底部）
+    var pw=S(0.072), ph=S(0.04), px=W/2-pw*2-S(0.008), py=H-S(0.065);
+    var keys=['peek','hint','freeze','shuffle'];
+    for(var i=0;i<4;i++){
+      var bx=px+i*(pw+S(0.008));
+      if(tx>=bx&&tx<=bx+pw&&ty>=py&&ty<=py+ph){
+        usePowerUp(keys[i]);
+        return;
+      }
+    }
+    // 返回按钮检测（游戏中随时可退出）
+    // 返回按钮检测（游戏中随时可退出）
+    var hudTop = safeTop + S(0.05);
+    var backW = SW(0.15), backH = S(0.038);
+    var backX = W - backW - S(0.012), backY = hudTop + S(0.016);
+    if(tx>=backX&&tx<=backX+backW&&ty>=backY&&ty<=backY+backH){
+      AudioManager.play('button_click');tapFeedback();
+      cleanupGame();
+      if(state.isTimedMode || state.isDaily){
+        // 限时模式和每日挑战：退出回到主菜单
+        state.isTimedMode = false;
+        state.isDaily = false;
+        state.phase='MENU';
+      } else {
+        state.phase='LEVELS';
+        if(state.currentLevel)state.levelPage=Math.floor((state.currentLevel.id-1)/8);
+      }
+      AudioManager.setState('MENU');
+      return;
+    }
+    for(var i=0;i<state.cards.length;i++){if(state.cards[i].contains(tx,ty)){onCardClick(i);return;}}
+  }
+}
+
+// ======================================
+// 微信能力
+// ======================================
+function uploadScore(score){try{wx.setUserCloudStorage({KVDataList:[{key:'memory_rank',value:JSON.stringify({score:score,ts:Date.now()})}]});}catch(e){}}
+function setupShare(score){try{wx.showShareMenu({withShareTicket:true,menus:['shareAppMessage','shareTimeline']});wx.onShareAppMessage(function(){return{title:'我翻到了'+score+'分! 你能超过我吗?'};});}catch(e){}}
+function tapFeedback(){try{wx.vibrateShort({type:'light'});}catch(e){}}
+// 微信生命周期：切后台暂停 BGM，切回恢复
+try {
+  wx.onShow(function(){if(_audioInited){AudioManager.setState(AudioManager.getState()||"MENU");}});
+  wx.onHide(function(){if(_audioInited){AudioManager.stopMusic();}});
+} catch(e){}
+
+
+// 初始画面：先渲染一帧，再启动循环，避免黑屏等待
+initBgParticles();
+try { render(); } catch (e) {}
+rAF(gameLoop);
+
+

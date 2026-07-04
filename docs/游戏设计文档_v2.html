@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记忆翻牌大师 · 游戏设计文档 v2.0</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.7; }
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 2rem; color: #FFD700; margin-bottom: 8px; }
+  .subtitle { color: #888; margin-bottom: 32px; font-size: 0.95rem; }
+  h2 { font-size: 1.3rem; color: #4DABF7; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid #2a2a4e; }
+  h3 { font-size: 1.05rem; color: #69DB7C; margin: 24px 0 10px; }
+  p { margin-bottom: 12px; }
+  .pillar-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+  .pillar { background: #1a1a2e; border-radius: 12px; padding: 16px; border-left: 3px solid; }
+  .pillar.p1 { border-color: #FFD700; }
+  .pillar.p2 { border-color: #4DABF7; }
+  .pillar.p3 { border-color: #FF6B6B; }
+  .pillar.p4 { border-color: #69DB7C; }
+  .pillar .icon { font-size: 1.5rem; }
+  .pillar .name { font-weight: 700; margin: 6px 0 4px; color: #fff; }
+  .pillar .desc { font-size: 0.85rem; color: #aaa; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.88rem; }
+  th { background: #2a2a4e; color: #FFD700; padding: 8px 12px; text-align: left; font-weight: 600; }
+  td { padding: 7px 12px; border-bottom: 1px solid #1a1a2e; }
+  tr:hover td { background: #1a1a2e; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 600; margin-right: 4px; }
+  .tag-new { background: #2a2a4e; color: #69DB7C; border: 1px solid #69DB7C44; }
+  .tag-balance { background: #2a2a4e; color: #FFD700; border: 1px solid #FFD70044; }
+  .tag-ux { background: #2a2a4e; color: #4DABF7; border: 1px solid #4DABF744; }
+  .mechanic-card { background: #1a1a2e; border-radius: 10px; padding: 16px 20px; margin: 14px 0; border: 1px solid #2a2a4e; }
+  .mechanic-card h4 { color: #FFA94D; margin-bottom: 8px; font-size: 1rem; }
+  .mechanic-card .why { color: #aaa; font-size: 0.85rem; margin-bottom: 8px; font-style: italic; }
+  .flow-step { display: flex; align-items: center; margin: 8px 0; }
+  .flow-step .num { width: 28px; height: 28px; border-radius: 50%; background: #FFD700; color: #0f0f1a; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-right: 12px; flex-shrink: 0; font-size: 0.85rem; }
+  .flow-step .text { font-size: 0.9rem; }
+  .balance-note { background: #1a1a2e; border-left: 3px solid #FFD700; padding: 10px 14px; margin: 10px 0; font-size: 0.85rem; color: #ccc; border-radius: 0 8px 8px 0; }
+  .balance-note strong { color: #FFD700; }
+  code { background: #2a2a4e; padding: 1px 5px; border-radius: 3px; font-size: 0.85em; color: #FFA94D; }
+  ul li { margin: 6px 0 6px 18px; font-size: 0.9rem; }
+  .highlight { color: #FFD700; font-weight: 600; }
+  .danger { color: #ff6b6b; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>🃏 记忆翻牌大师 · 游戏设计文档 v2.0</h1>
+<p class="subtitle">设计目标：在纯记忆力考验基础上，加入策略维度与元游戏系统，提升留存率与分享传播力</p>
+
+<h2>一、设计支柱（Design Pillars）</h2>
+<div class="pillar-grid">
+  <div class="pillar p1"><div class="icon">🧠</div><div class="name">聪明感而非挫败感</div><div class="desc">玩家失败时应觉得"我下次能记住"，而非"这游戏太难了"</div></div>
+  <div class="pillar p2"><div class="icon">🎯</div><div class="name">策略优于纯记忆</div><div class="desc">高关卡引入道具和特殊规则，让技巧和策略能弥补记忆力的不足</div></div>
+  <div class="pillar p3"><div class="icon">🔁</div><div class="name">每天都有回来的理由</div><div class="desc">每日挑战 + 成就系统 + 连续打卡，构建长期留存习惯</div></div>
+  <div class="pillar p4"><div class="icon">💬</div><div class="name">分享即传播</div><div class="desc">过关分享卡面精美，排行榜激发竞争，邀请好友获得奖励</div></div>
+</div>
+
+<h2>二、新增机制详述</h2>
+
+<!-- 机制1：道具系统 -->
+<div class="mechanic-card">
+  <h4>🔮 机制一：道具系统（Power-Up System）</h4>
+  <p class="why">为什么需要：纯记忆游戏的策略深度有限。道具让玩家在卡关时有"求助选项"，让游戏更有策略性。</p>
+  <table>
+    <tr><th>道具</th><th>效果</th><th>获取方式</th><th>使用限制</th></tr>
+    <tr><td>🔍 偷看</td><td>所有卡片翻开3秒后自动盖回</td><td>每关免费1次</td><td>每局限用1次</td></tr>
+    <tr><td>💡 提示</td><td>高亮显示一对可匹配的卡片</td><td>每关免费2次</td><td>每局限用2次</td></tr>
+    <tr><td>⏱️ 冻结</td><td>计时器暂停10秒</td><td>每关免费1次</td><td>每局限用1次</td></tr>
+    <tr><td>🔄 洗牌</td><td>将未匹配的卡片重新随机排列</td><td>免费</td><td>每局限用1次</td></tr>
+  </table>
+  <p><strong class="highlight">设计要点：</strong></p>
+  <ul>
+    <li>道具按钮放在游戏界面底部，翻牌前或翻牌后可随时使用</li>
+    <li>所有道具每关免费提供一定次数，让玩家自然学会使用</li>
+    <li>高难度关卡（第10关起）免费次数增加，降低挫败感</li>
+  </ul>
+  <div class="balance-note">
+    <strong>平衡性考量：</strong>道具不能太强（否则玩家不需要记忆），也不能太弱（否则没人用）。
+    "偷看"只持续3秒，且需要玩家主动记住位置；"提示"只高亮一对，不直接配对。
+    所有道具均为免费，通过关卡设计自然调节难度。
+  </div>
+</div>
+
+<!-- 机制2：每日挑战 -->
+<div class="mechanic-card">
+  <h4>📅 机制二：每日挑战（Daily Challenge）</h4>
+  <p class="why">为什么需要：这是休闲游戏留存的核心驱动。每天一个新关卡，完成后获得金币+打卡标记，连续7天获得大奖。</p>
+  <div class="flow-step"><div class="num">1</div><div class="text">主界面增加"每日挑战"入口，显示今日关卡和连续打卡天数</div></div>
+  <div class="flow-step"><div class="num">2</div><div class="text">每日关卡固定种子（根据日期生成），所有玩家同一天玩同一关</div></div>
+  <div class="flow-step"><div class="num">3</div><div class="text">完成挑战获得 <strong class="highlight">50金币 + 打卡标记</strong>，连续7天获得 <strong class="highlight">300金币 + 特殊称号</strong></div></div>
+  <div class="flow-step"><div class="num">4</div><div class="text">未完成的每日挑战可在当天任何时候补玩</div></div>
+  <div class="balance-note">
+    <strong>技术实现：</strong>用日期作为随机种子（<code>seed = Date.now() 的日期部分</code>），保证同一天所有玩家拿到相同的关卡布局。
+    打卡数据存 <code>wx.setStorageSync('daily_streak', {...})</code>。
+  </div>
+</div>
+
+<!-- 机制3：成就系统 -->
+<div class="mechanic-card">
+  <h4>🏆 机制三：成就系统（Achievement System）</h4>
+  <p class="why">为什么需要：成就给玩家长期追求目标，特别是对于那些已经通关所有关卡的核心玩家。同时也是分享传播的素材。</p>
+  <table>
+    <tr><th>成就</th><th>条件</th><th>奖励</th></tr>
+    <tr><td>🎯 初出茅庐</td><td>完成第1关</td><td>无</td></tr>
+    <tr><td>🔥 连击新手</td><td>在一关中达成5连击</td><td>30金币</td></tr>
+    <tr><td>⚡ 闪电记忆</td><td>在30秒内完成任意关卡</td><td>50金币</td></tr>
+    <tr><td>💎 完美主义者</td><td>任意关卡获得3星且0失误</td><td>100金币</td></tr>
+    <tr><td>🏅 关卡大师</td><td>通过所有15关</td><td>解锁特殊卡背</td></tr>
+    <tr><td>📅 打卡狂人</td><td>连续打卡7天</td><td>300金币 + 称号</td></tr>
+    <tr><td>🧠 记忆之王</td><td>所有关卡获得3星</td><td>解锁全部卡背 + 特殊称号</td></tr>
+  </table>
+  <p><strong class="highlight">成就展示：</strong>主界面"成就"按钮，打开成就墙。已完成的成就高亮显示，未完成的显示进度。点击成就可分享到群/朋友圈。</p>
+</div>
+
+<!-- 机制4：金币经济系统 -->
+<div class="mechanic-card">
+  <h4>💰 机制四：金币经济系统（Coin Economy）</h4>
+  <p class="why">为什么需要：金币是成就系统和进度追踪的载体。玩家通过过关获得金币，形成"玩→获得金币→解锁成就→继续挑战更高关卡"的正循环。</p>
+  <table>
+    <tr><th>获得途径</th><th>数量</th><th>频率限制</th></tr>
+    <tr><td>过关奖励（基础）</td><td>10 × 关卡ID</td><td>每关首次通过</td></tr>
+    <tr><td>⭐ 1星额外奖励</td><td>+10金币</td><td>—</td></tr>
+    <tr><td>⭐⭐ 2星额外奖励</td><td>+20金币</td><td>—</td></tr>
+    <tr><td>⭐⭐⭐ 3星额外奖励</td><td>+50金币</td><td>—</td></tr>
+    <tr><td>每日挑战完成</td><td>50金币</td><td>每天1次</td></tr>
+    <tr><td>连续打卡7天</td><td>300金币</td><td>每7天1次</td></tr>
+    <tr><td>首次分享</td><td>20金币</td><td>每天1次</td></tr>
+  </table>
+  <div class="balance-note">
+    <strong>金币作用：</strong>金币用于追踪玩家进度，并在结算界面展示获得的奖励。
+    所有道具均为免费，金币不影响游戏平衡，仅作为成就和进度的视觉反馈。
+  </div>
+</div>
+
+<!-- 机制5：排行榜优化 -->
+<div class="mechanic-card">
+  <h4>📊 机制五：社交排行榜优化</h4>
+  <p class="why">为什么需要：人是社会性动物，排行榜是驱动玩家反复挑战同一关卡的核心动力。</p>
+  <ul>
+    <li><strong>本周最高分榜</strong>：展示本周内所有玩家的最高分，每周一清零</li>
+    <li><strong>关卡最佳榜</strong>：每个关卡独立排行榜，展示该关卡的最高分（激发"我要成为这关第一"的竞争感）</li>
+    <li><strong>好友榜</strong>：展示微信好友的最高分，分享后可邀请好友挑战</li>
+    <li><strong>榜单分享卡</strong>：排名第一时生成精美分享卡，"我在XX关卡排名第一，来挑战我！"</li>
+  </ul>
+</div>
+
+<h2>三、关卡设计优化（第16~30关）</h2>
+<p>当前只有15关，对于核心玩家来说太少了。设计后续15关，引入新机制：</p>
+<table>
+  <tr><th>关卡段</th><th>新机制</th><th>设计目的</th></tr>
+  <tr><td>第16~18关</td><td>🃏 引入百搭牌（Wild Card）</td><td>百搭牌可以跟任何牌配对，考验玩家"保留百搭牌到关键时刻"的策略</td></tr>
+  <tr><td>第19~21关</td><td>⚡ 限时配对（配对后须在5秒内完成下一对）</td><td>增加紧迫感，考验工作记忆的刷新速度</td></tr>
+  <tr><td>第22~24关</td><td>🌗 暗牌模式（每次只能看见最后翻的2张牌）</td><td>增加难度，玩家必须真正记住位置</td></tr>
+  <tr><td>第25~27关</td><td>🔄 中途洗牌（配对过程中卡片会重新排列）</td><td>打破"记住位置"的策略，考验适应能力</td></tr>
+  <tr><td>第28~30关</td><td>💀 地狱模式（以上机制随机组合）</td><td>终极挑战，只有0.1%的玩家能通关，成为传说</td></tr>
+</table>
+<div class="balance-note">
+  <strong>注意：</strong>新增机制需要通过<strong>教学关</strong>引导。比如第16关是百搭牌教学关，
+  会先让玩家体验一次百搭牌的效果，理解规则后再正式开始。
+</div>
+
+<h2>四、核心循环再设计</h2>
+<p>当前循环：<code>主菜单 → 选关 → 玩 → 结算 → 主菜单</code></p>
+<p><strong class="highlight">优化后循环：</strong></p>
+<div class="flow-step"><div class="num">1</div><div class="text"><strong>主菜单</strong>：显示今日打卡状态、成就进度、金币数量、每日挑战入口</div></div>
+<div class="flow-step"><div class="num">2</div><div class="text"><strong>选关</strong>：显示关卡星级、最佳成绩、排行榜入口</div></div>
+<div class="flow-step"><div class="num">3</div><div class="text"><strong>游戏中</strong>：道具栏、连击显示、计时器、金币获得动画</div></div>
+<div class="flow-step"><div class="num">4</div><div class="text"><strong>结算</strong>：星级评价、金币奖励、成就解锁提示、分享按钮、排行榜入口</div></div>
+<div class="flow-step"><div class="num">5</div><div class="text"><strong>元循环</strong>：使用道具 → 挑战更高关卡 → 获得成就和奖励 → 分享传播</div></div>
+
+<h2>五、技术实现要点</h2><!-- 已删除变现策略章节，后续章节号已修正 -->
+<h3>道具系统实现</h3>
+<ul>
+  <li>在 <code>state</code> 中新增 <code>powerUuses: { peek:0, hint:0, freeze:0, shuffle:0 }</code></li>
+  <li>在游戏界面底部绘制道具栏（4个道具图标 + 数量）</li>
+  <li>点击道具 → 触发对应效果 → 扣除使用次数</li>
+  <li>"偷看"效果：将所有卡片翻到正面，3秒后自动翻回（用 <code>setTimeout</code>）</li>
+  <li>"提示"效果：找到一对未匹配的卡片，给它们加上发光边框，持续2秒</li>
+</ul>
+<h3>每日挑战实现</h3>
+<ul>
+  <li>用 <code>new Date().toDateString()</code> 作为随机种子，保证同一天所有玩家获得相同关卡</li>
+  <li>打卡数据格式：<code>{ lastDate: '2026-07-04', streak: 3, history: [...] }</code></li>
+  <li>连续打卡判断：检查 <code>lastDate</code> 是否是昨天</li>
+</ul>
+<h3>成就系统实现</h3>
+<ul>
+  <li>成就数据存本地（<code>wx.setStorageSync('achievements', {...})</code>）</li>
+  <li>每次游戏结算时检查成就条件，弹出"成就解锁"动画</li>
+  <li>成就墙用滚动列表展示，已完成的高亮</li>
+</ul>
+
+<h2>六、开发优先级</h2>
+<table>
+  <tr><th>优先级</th><th>功能</th><th>预估工作量</th><th>影响</th></tr>
+  <tr><td><span class="tag tag-new">P0</span> 立即做</td><td>道具系统 + 金币经济</td><td>2小时</td><td>核心玩法提升，内购变现基础</td></tr>
+  <tr><td><span class="tag tag-new">P0</span> 立即做</td><td>每日挑战 + 打卡系统</td><td>1.5小时</td><td>留存率核心驱动</td></tr>
+  <tr><td><span class="tag tag-balance">P1</span> 本周内</td><td>成就系统</td><td>1小时</td><td>长期追求目标</td></tr>
+  <tr><td><span class="tag tag-balance">P1</span> 本周内</td><td>排行榜优化（分关卡榜单）</td><td>1小时</td><td>社交竞争驱动</td></tr>
+  <tr><td><span class="tag tag-ux">P2</span> 下周</td><td>第16~30关 + 新机制</td><td>3小时</td><td>内容深度扩展</td></tr>
+  <tr><td><span class="tag tag-ux">P2</span> 下周</td><td>卡背解锁 + 个性化</td><td>1小时</td><td>炫耀驱动，提升分享率</td></tr>
+</table>
+
+<h2>七、成功指标（KPI）</h2>
+<ul>
+  <li><strong>次日留存率</strong>：目标 &gt;45%（行业平均 ~30%）</li>
+  <li><strong>7日留存率</strong>：目标 &gt;20%（每日挑战+打卡系统驱动）</li>
+  <li><strong>平均会话时长</strong>：目标 5~8分钟（当前约3分钟，道具使用会延长）</li>
+  <li><strong>内购转化率</strong>：目标 &gt;3%（行业平均 ~2%）</li>
+  <li><strong>分享率</strong>：目标 &gt;15%（过关分享+成就分享+排行榜分享）</li>
+  <li><strong>关卡完成率</strong>：第1关 &gt;95%，第15关 &gt;40%（难度曲线合理）</li>
+</ul>
+
+<p style="margin-top:32px; color:#666; font-size:0.82rem; text-align:center;">文档版本：v2.0 · 日期：2026-07-04 · 作者：玩法师（GameDesigner）</p>
+
+</div>
+</body>
+</html>

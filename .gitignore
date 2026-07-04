@@ -1,0 +1,4 @@
+.agents/
+.codex/
+project.private.config.json
+temp_insert.js

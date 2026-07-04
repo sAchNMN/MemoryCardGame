@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>微信小游戏 · 快速上线架构方案</title>
+<style>
+  :root {
+    --bg: #f8f9fc;
+    --card: #ffffff;
+    --text: #1a1a2e;
+    --primary: #07c160;
+    --accent: #1aad19;
+    --warn: #faad14;
+    --danger: #ee0a24;
+    --border: #e8eaed;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 0;
+  }
+
+  /* Header */
+  .hero {
+    background: linear-gradient(135deg, #07c160 0%, #06ad56 50%, #059649 100%);
+    color: white;
+    padding: 48px 40px;
+    text-align: center;
+  }
+  .hero h1 { font-size: 36px; font-weight: 800; margin-bottom: 8px; letter-spacing: 2px; }
+  .hero .subtitle { font-size: 16px; opacity: .85; }
+  .hero .meta { margin-top: 16px; font-size: 13px; opacity: .7; }
+
+  /* Layout */
+  .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px 80px; }
+
+  /* Section */
+  .section { margin-bottom: 48px; }
+  .section-title {
+    font-size: 22px; font-weight: 700; margin-bottom: 20px;
+    padding-left: 14px; border-left: 4px solid var(--primary);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .section-title .badge {
+    font-size: 12px; font-weight: 600; background: var(--primary); color: #fff;
+    padding: 2px 10px; border-radius: 20px; margin-left: 8px;
+  }
+
+  /* Cards */
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .card {
+    background: var(--card); border-radius: var(--radius); padding: 20px;
+    border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,.04);
+    transition: transform .15s, box-shadow .15s;
+  }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.08); }
+  .card h3 { font-size: 15px; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .card p { font-size: 13px; color: #555; }
+  .card ul { font-size: 13px; color: #555; padding-left: 18px; margin-top: 6px; }
+  .card ul li { margin-bottom: 4px; }
+
+  /* Architecture Diagram */
+  .arch-diagram {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 32px 24px; margin-bottom: 24px; overflow-x: auto;
+  }
+  .arch-layer { margin-bottom: 8px; display: flex; align-items: stretch; gap: 4px; }
+  .arch-layer:last-child { margin-bottom: 0; }
+  .arch-label {
+    writing-mode: vertical-lr; text-orientation: mixed; font-size: 11px; font-weight: 700;
+    padding: 8px 6px; border-radius: 6px; color: #fff; text-align: center;
+    min-width: 28px; display: flex; align-items: center; justify-content: center;
+    letter-spacing: 2px;
+  }
+  .arch-blocks { display: flex; gap: 4px; flex: 1; }
+  .arch-block {
+    flex: 1; padding: 10px 8px; border-radius: 6px; text-align: center; font-size: 11px;
+    font-weight: 600; border: 1px solid transparent;
+  }
+  .arch-block .sub { font-weight: 400; font-size: 10px; color: #666; margin-top: 2px; }
+
+  .arch-row { display: flex; gap: 8px; margin-bottom: 6px; }
+  .arch-item {
+    flex: 1; padding: 10px 8px; border-radius: 6px; text-align: center; font-size: 12px;
+    font-weight: 600; border: 1px solid transparent;
+  }
+
+  /* Code blocks */
+  .code-block {
+    background: #1a1a2e; border-radius: 8px; padding: 16px 20px; overflow-x: auto;
+    margin: 12px 0; position: relative;
+  }
+  .code-block code { font-family: "Fira Code", "Cascadia Code", monospace; font-size: 13px; color: #e4e4e4; line-height: 1.7; }
+  .code-block .comment { color: #6a9955; }
+  .code-block .keyword { color: #569cd6; }
+  .code-block .string { color: #ce9178; }
+  .code-block .func { color: #dcdcaa; }
+  .code-block .number { color: #b5cea8; }
+
+  /* Roadmap */
+  .roadmap { position: relative; padding-left: 32px; }
+  .roadmap::before {
+    content: ''; position: absolute; left: 12px; top: 8px; bottom: 8px;
+    width: 2px; background: #e0e0e0;
+  }
+  .roadmap-item { position: relative; margin-bottom: 24px; }
+  .roadmap-item::before {
+    content: attr(data-phase); position: absolute; left: -32px; top: 2px;
+    width: 26px; height: 26px; border-radius: 50%; background: var(--primary); color: #fff;
+    font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  }
+  .roadmap-item:nth-child(2)::before { background: var(--warn); }
+  .roadmap-item:nth-child(3)::before { background: var(--danger); }
+  .roadmap-item:nth-child(4)::before { background: #888; }
+  .roadmap-item h3 { font-size: 15px; font-weight: 700; }
+  .roadmap-item p { font-size: 13px; color: #555; }
+
+  /* Tags */
+  .tag {
+    display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px;
+    font-weight: 600; margin-right: 4px;
+  }
+  .tag-green { background: #e8f5e9; color: #2e7d32; }
+  .tag-blue { background: #e3f2fd; color: #1565c0; }
+  .tag-orange { background: #fff3e0; color: #e65100; }
+  .tag-red { background: #fce4ec; color: #c62828; }
+
+  /* Key metric */
+  .metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 20px 0; }
+  .metric-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px; text-align: center;
+  }
+  .metric-card .num { font-size: 28px; font-weight: 800; color: var(--primary); }
+  .metric-card .label { font-size: 12px; color: #888; margin-top: 4px; }
+
+  /* Flow chart */
+  .flow-row { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; margin: 16px 0; }
+  .flow-node {
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 14px; font-size: 12px; font-weight: 600;
+  }
+  .flow-arrow { color: var(--primary); font-weight: 700; font-size: 18px; }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  .emoji { font-style: normal; }
+  @media (max-width: 600px) {
+    .hero { padding: 32px 20px; }
+    .hero h1 { font-size: 24px; }
+    .card-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ HERO ============ -->
+<div class="hero">
+  <h1>🎮 微信小游戏 · 快速上线架构方案</h1>
+  <p class="subtitle">为「零基础上线、自带增长引擎」量身打造</p>
+  <p class="meta">设计日期：2026-07-04 &nbsp;|&nbsp; 版本：v1.0 &nbsp;|&nbsp; 目标：30 天内上线</p>
+</div>
+
+<div class="container">
+
+<!-- ============ 核心指标 ============ -->
+<div class="metric-row">
+  <div class="metric-card"><div class="num">30天</div><div class="label">从零到上线</div></div>
+  <div class="metric-card"><div class="num">3层</div><div class="label">架构分层</div></div>
+  <div class="metric-card"><div class="num">5大</div><div class="label">获客入口</div></div>
+  <div class="metric-card"><div class="num">4MB</div><div class="label">首包体积目标</div></div>
+</div>
+
+<!-- ============ 一、技术选型 ============ -->
+<div class="section">
+  <h2 class="section-title">🎯 一、技术选型建议</h2>
+  <div class="card-grid">
+    <div class="card">
+      <h3><span class="tag tag-green">推荐</span> Cocos Creator</h3>
+      <ul>
+        <li>微信小游戏生态最成熟的引擎</li>
+        <li>直接导出为微信小游戏项目，零适配成本</li>
+        <li>内置微信登录、分享、云存档 API 集成</li>
+        <li>2D/2.5D 游戏首选，学习曲线平缓</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-blue">备选</span> 原生 Canvas + 轻框架</h3>
+      <ul>
+        <li>纯微信原生 API 开发，无第三方依赖</li>
+        <li>包体最小（可控制在 500KB 以内）</li>
+        <li>适合休闲小游戏、益智类、跳一跳类</li>
+        <li>适合编程初学者理解游戏底层逻辑</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag tag-orange">进阶</span> Unity + WeChat SDK</h3>
+      <ul>
+        <li>3D 游戏首选，画质上限最高</li>
+        <li>导出包体较大，需分包加载</li>
+        <li>适合有 Unity 经验、或做重度游戏的团队</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 二、整体架构分层 ============ -->
+<div class="section">
+  <h2 class="section-title">🏗️ 二、架构分层设计</h2>
+  <p style="font-size:14px;color:#555;margin-bottom:16px;">小游戏采用「引擎层 → 业务层 → 微信层」三层架构，职责清晰、便于快速迭代。</p>
+
+  <div class="arch-diagram">
+    <!-- Layer 1: 视图渲染 -->
+    <div class="arch-layer">
+      <div class="arch-label" style="background:#07c160;">视图</div>
+      <div class="arch-blocks">
+        <div class="arch-block" style="background:#e8f5e9;border-color:#a5d6a7;">
+          🖼️ Canvas 主场景
+          <div class="sub">游戏画面主渲染</div>
+        </div>
+        <div class="arch-block" style="background:#e8f5e9;border-color:#a5d6a7;">
+          📦 WXML UI 层
+          <div class="sub">菜单、弹窗、Loading</div>
+        </div>
+        <div class="arch-block" style="background:#e8f5e9;border-color:#a5d6a7;">
+          🎬 动画/特效
+          <div class="sub">粒子、转场、动效</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Layer 2: 游戏逻辑 -->
+    <div class="arch-layer">
+      <div class="arch-label" style="background:#2196f3;">逻辑</div>
+      <div class="arch-blocks">
+        <div class="arch-block" style="background:#e3f2fd;border-color:#90caf9;">
+          🎮 核心玩法
+          <div class="sub">游戏循环、碰撞、得分</div>
+        </div>
+        <div class="arch-block" style="background:#e3f2fd;border-color:#90caf9;">
+          📊 数值系统
+          <div class="sub">等级、金币、道具</div>
+        </div>
+        <div class="arch-block" style="background:#e3f2fd;border-color:#90caf9;">
+          🧩 关卡管理
+          <div class="sub">关卡配置、进度</div>
+        </div>
+        <div class="arch-block" style="background:#e3f2fd;border-color:#90caf9;">
+          🏆 成就/排行
+          <div class="sub">分数上传、排行</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Layer 3: 微信能力 -->
+    <div class="arch-layer">
+      <div class="arch-label" style="background:#ff9800;">微信</div>
+      <div class="arch-blocks">
+        <div class="arch-block" style="background:#fff3e0;border-color:#ffcc80;">
+          🔐 登录授权
+          <div class="sub">wx.login / getUserProfile</div>
+        </div>
+        <div class="arch-block" style="background:#fff3e0;border-color:#ffcc80;">
+          📤 分享裂变
+          <div class="sub">wx.shareAppMessage</div>
+        </div>
+        <div class="arch-block" style="background:#fff3e0;border-color:#ffcc80;">
+          📺 广告变现
+          <div class="sub">激励视频 / Banner</div>
+        </div>
+        <div class="arch-block" style="background:#fff3e0;border-color:#ffcc80;">
+          💾 云存档
+          <div class="sub">wx.setUserCloudStorage</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Layer 4: 后端服务 -->
+    <div class="arch-layer">
+      <div class="arch-label" style="background:#9c27b0;">后端</div>
+      <div class="arch-blocks">
+        <div class="arch-block" style="background:#f3e5f5;border-color:#ce93d8;">
+          🗄️ 微信云开发
+          <div class="sub">云数据库 / 云函数</div>
+        </div>
+        <div class="arch-block" style="background:#f3e5f5;border-color:#ce93d8;">
+          📈 统计分析
+          <div class="sub">微信数据分析</div>
+        </div>
+        <div class="arch-block" style="background:#f3e5f5;border-color:#ce93d8;">
+          🖼️ 素材CDN
+          <div class="sub">图片、音频资源</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 三、项目目录结构 ============ -->
+<div class="section">
+  <h2 class="section-title">📁 三、推荐项目结构</h2>
+  <div class="card">
+    <div class="code-block">
+<code>
+<span class="comment">minigame/                          # 游戏项目根目录</span>
+├── <span class="keyword">project.config.json</span>            <span class="comment"># 微信开发者工具配置</span>
+├── <span class="keyword">game.js</span>                         <span class="comment"># 游戏入口（必填）</span>
+├── <span class="keyword">game.json</span>                       <span class="comment"># 游戏全局配置</span>
+├── <span class="keyword">app.js</span>                          <span class="comment"># 可选：App 生命周期</span>
+├── <span class="keyword">app.json</span>                        <span class="comment"># 可选：全局配置</span>
+│
+├── <span class="keyword">images/</span>                          <span class="comment"># 图片/精灵资源</span>
+│   ├── bg/                        <span class="comment"># 背景图</span>
+│   ├── ui/                        <span class="comment"># UI 元素（按钮、图标）</span>
+│   ├── sprite/                    <span class="comment"># 游戏精灵/角色</span>
+│   └── share/                     <span class="comment"># 分享图（朋友圈/好友）</span>
+│
+├── <span class="keyword">audio/</span>                          <span class="comment"># 音效/音乐</span>
+│   ├── bgm/                       <span class="comment"># 背景音乐</span>
+│   └── sfx/                       <span class="comment"># 音效（点击、得分、失败）</span>
+│
+├── <span class="keyword">js/</span>                             <span class="comment"># 核心代码</span>
+│   ├── <span class="func">main.js</span>                      <span class="comment"># 游戏主循环 / 场景管理</span>
+│   ├── <span class="func">game.js</span>                      <span class="comment"># 游戏核心逻辑</span>
+│   ├── <span class="func">renderer.js</span>                  <span class="comment"># 渲染管理（Canvas）</span>
+│   ├── <span class="func">physics.js</span>                   <span class="comment"># 物理/碰撞检测</span>
+│   ├── <span class="func">input.js</span>                     <span class="comment"># 输入管理（点击/触摸）</span>
+│   │
+│   ├── <span class="keyword">scenes/</span>                       <span class="comment"># 场景管理</span>
+│   │   ├── <span class="func">boot.js</span>                    <span class="comment"># 启动/预加载场景</span>
+│   │   ├── <span class="func">menu.js</span>                    <span class="comment"># 主菜单场景</span>
+│   │   ├── <span class="func">play.js</span>                    <span class="comment"># 游戏主场景</span>
+│   │   ├── <span class="func">result.js</span>                  <span class="comment"># 结算/成绩场景</span>
+│   │   └── <span class="func">rank.js</span>                    <span class="comment"># 排行榜场景</span>
+│   │
+│   ├── <span class="keyword">wechat/</span>                       <span class="comment"># 微信API封装层</span>
+│   │   ├── <span class="func">auth.js</span>                    <span class="comment"># 登录 / 授权</span>
+│   │   ├── <span class="func">share.js</span>                   <span class="comment"># 分享 / 转发</span>
+│   │   ├── <span class="func">ad.js</span>                      <span class="comment"># 广告管理（激励/插屏）</span>
+│   │   ├── <span class="func">cloud.js</span>                   <span class="comment"># 云开发 / 云存档</span>
+│   │   ├── <span class="func">rank.js</span>                    <span class="comment"># 好友排行榜</span>
+│   │   ├── <span class="func">subscribe.js</span>               <span class="comment"># 订阅消息</span>
+│   │   └── <span class="func">feedback.js</span>                <span class="comment"># 客服/反馈</span>
+│   │
+│   └── <span class="keyword">lib/</span>                          <span class="comment"># 工具库</span>
+│       ├── <span class="func">storage.js</span>                 <span class="comment"># 本地存储封装</span>
+│       ├── <span class="func">audio.js</span>                   <span class="comment"># 音频管理</span>
+│       └── <span class="func">util.js</span>                    <span class="comment"># 通用工具函数</span>
+│
+├── <span class="keyword">data/</span>                           <span class="comment"># 配置文件</span>
+│   ├── <span class="func">levels.json</span>                   <span class="comment"># 关卡配置</span>
+│   └── <span class="func">items.json</span>                    <span class="comment"># 道具/数值配置</span>
+│
+└── <span class="keyword">style/</span>                          <span class="comment"># WXSS 样式文件</span>
+    └── <span class="func">main.wxss</span>                     <span class="comment"># 全局样式</span>
+</code>
+    </div>
+    <p style="font-size:13px;color:#888;margin-top:8px;">💡 使用 Cocos Creator 时，src/ 目录结构由引擎自动生成，但微信 API 封装层（js/wechat/）仍需手动管理。</p>
+  </div>
+</div>
+
+<!-- ============ 四、获客增长引擎 ============ -->
+<div class="section">
+  <h2 class="section-title">🚀 四、获客增长引擎 <span class="badge">核心</span></h2>
+  <p style="font-size:14px;color:#555;margin-bottom:12px;">小游戏最大的优势就是微信生态内的社交裂变能力，架构设计时就要把这 5 个入口嵌入游戏流程。</p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>👥 1. 好友分享 <span class="tag tag-green">必须</span></h3>
+      <p>游戏结算/闯关成功后，弹出「分享给好友得奖励」按钮。</p>
+      <div class="code-block" style="margin:8px 0 0;padding:10px 14px;">
+<code><span class="comment">// 游戏结算时调用</span>
+<span class="keyword">wx</span>.<span class="func">shareAppMessage</span>({
+  title: <span class="string">'我闯到了第12关，你来试试？'</span>,
+  imageUrl: <span class="string">'images/share/level12.jpg'</span>
+});
+</code>
+      </div>
+    </div>
+    <div class="card">
+      <h3>📊 2. 好友排行榜 <span class="tag tag-green">必须</span></h3>
+      <p>利用微信关系链的「好友比拼」是最高效的社交驱动力。分数上传 + 排行榜展示即可。</p>
+      <div class="code-block" style="margin:8px 0 0;padding:10px 14px;">
+<code><span class="keyword">wx</span>.<span class="func">setUserCloudStorage</span>({
+  KVDataList: [{ key: <span class="string">'score'</span>,
+    value: <span class="string">'1200'</span> }], <span class="comment">// JSON 字符串</span>
+});
+
+<span class="keyword">wx</span>.<span class="func">getFriendCloudStorage</span>({
+  success: res => <span class="func">renderRank</span>(res.data)
+});
+</code>
+      </div>
+    </div>
+    <div class="card">
+      <h3>💬 3. 分享到群 <span class="tag tag-blue">推荐</span></h3>
+      <p>群内好友点击分享卡片后，可自动进入同一个「群组房间/挑战」。提升群活跃度 = 免费获客。</p>
+    </div>
+    <div class="card">
+      <h3>🎁 4. 激励视频换命/换道具 <span class="tag tag-green">必须</span></h3>
+      <p>生命耗尽 → 看视频复活；关卡卡住 → 看视频拿提示。用户主动选择，转化率高。</p>
+    </div>
+    <div class="card">
+      <h3>🔔 5. 订阅消息召回 <span class="tag tag-orange">推荐</span></h3>
+      <p>用户同意后，定时推送「你的体力已恢复满！」「新关卡已上线」等消息，唤醒沉睡用户。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 五、用户流程设计 ============ -->
+<div class="section">
+  <h2 class="section-title">🔄 五、典型用户流程</h2>
+  <div class="card" style="padding:24px;">
+    <div class="flow-row">
+      <span class="flow-node">📱 打开小游戏</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-node">🔐 微信登录（静默）</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-node">🎬 启动动画 / Loading</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-node">🏠 主菜单</span>
+    </div>
+    <div class="flow-row">
+      <span class="flow-node">🎮 开始游戏</span>
+      <span class="flow-arrow" style="color:#ee0a24;">→</span>
+      <span class="flow-node" style="border-color:#ee0a24;">💀 Game Over</span>
+      <span class="flow-arrow" style="color:#ee0a24;">→</span>
+      <span class="flow-node" style="border-color:#ee0a24;">📺 看视频复活？</span>
+    </div>
+    <div class="flow-row">
+      <span class="flow-node" style="background:#e8f5e9;">🏆 结算分数</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-node" style="background:#e8f5e9;">📊 好友排名</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-node" style="background:#e8f5e9;">👥 分享邀请</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-node" style="background:#e8f5e9;">🔄 再来一局</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 六、商业化 ============ -->
+<div class="section">
+  <h2 class="section-title">💰 六、商业化模式</h2>
+  <div class="card-grid">
+    <div class="card">
+      <h3>📺 激励视频广告 <span class="tag tag-green">首选</span></h3>
+      <ul>
+        <li>复活 / 加命 / 双倍奖励 / 解锁关卡</li>
+        <li>用户主动选择，体验干扰小</li>
+        <li>eCPM 在游戏中最高（通常 30-150 元）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>🖼️ 插屏广告</h3>
+      <ul>
+        <li>关卡加载 / 场景切换时展示</li>
+        <li>注意控制频率（建议每 3 局 1 次）</li>
+        <li>收入稳定但影响体验</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>🎁 道具内购 <span class="tag tag-orange">高阶</span></h3>
+      <ul>
+        <li>wx.requestPayment 接入微信支付</li>
+        <li>道具 / 皮肤 / 去广告特权</li>
+        <li>需企业主体 + 虚拟商品资质审核</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 七、核心代码骨架 ============ -->
+<div class="section">
+  <h2 class="section-title">🧩 七、核心代码骨架（原生 Canvas 方案）</h2>
+  <p style="font-size:14px;color:#555;margin-bottom:12px;">如果选择原生开发（不依赖引擎），以下是必须的骨架代码：</p>
+
+  <div class="card">
+    <h3>game.js — 游戏入口</h3>
+    <div class="code-block">
+<code><span class="keyword">const</span> canvas = <span class="keyword">wx</span>.<span class="func">createCanvas</span>();
+<span class="keyword">const</span> ctx = canvas.<span class="func">getContext</span>(<span class="string">'2d'</span>);
+
+<span class="comment">// ===== 微信初始化 =====</span>
+<span class="keyword">wx</span>.<span class="func">showLoading</span>({ title: <span class="string">'加载中...'</span> });
+<span class="keyword">Promise</span>.<span class="func">all</span>([
+  <span class="func">loadAssets</span>(),      <span class="comment">// 预加载图片/音频</span>
+  <span class="func">wechatLogin</span>(),     <span class="comment">// 静默登录</span>
+]).<span class="func">then</span>(() => {
+  <span class="keyword">wx</span>.<span class="func">hideLoading</span>();
+  <span class="func">startGame</span>();
+});
+
+<span class="comment">// ===== 游戏主循环 =====</span>
+<span class="keyword">function</span> <span class="func">startGame</span>() {
+  <span class="func">switchScene</span>(<span class="string">'menu'</span>);
+  <span class="keyword">const</span> loop = () => {
+    <span class="func">update</span>();     <span class="comment">// 更新游戏状态</span>
+    <span class="func">render</span>(ctx);  <span class="comment">// 渲染画面</span>
+    <span class="keyword">wx</span>.<span class="func">requestAnimationFrame</span>(loop);
+  };
+  <span class="func">loop</span>();
+}
+</code>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <h3>js/wechat/share.js — 分享裂变核心</h3>
+    <div class="code-block">
+<code><span class="comment">// 结算场景内置分享逻辑</span>
+<span class="keyword">wx</span>.<span class="func">showShareMenu</span>({
+  withShareTicket: <span class="keyword">true</span>,  <span class="comment">// 支持群分享</span>
+  menus: [<span class="string">'shareAppMessage'</span>, <span class="string">'shareTimeline'</span>]
+});
+
+<span class="comment">// 自定义分享内容（按当前分数动态生成）</span>
+<span class="keyword">wx</span>.<span class="func">onShareAppMessage</span>(() => {
+  <span class="keyword">const</span> score = <span class="func">getCurrentScore</span>();
+  <span class="keyword">return</span> {
+    title: <span class="string">`我挑战到了 `</span> + score + <span class="string">` 分！你能超过我吗？`</span>,
+    imageUrl: <span class="string">'images/share/share_card_'</span> + <span class="func">getRankRange</span>(score) + <span class="string">'.png'</span>,
+  };
+});
+</code>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 八、上线前后检查清单 ============ -->
+<div class="section">
+  <h2 class="section-title">✅ 八、上线检查清单</h2>
+  <div class="card-grid">
+    <div class="card">
+      <h3>📋 开发阶段</h3>
+      <ul>
+        <li>☐ 游戏核心玩法闭环（能完整玩一局）</li>
+        <li>☐ 微信静默登录 + 头像昵称获取</li>
+        <li>☐ 分数上传 + 好友排行榜</li>
+        <li>☐ 激励视频广告接入</li>
+        <li>☐ 分享到好友 / 朋友圈</li>
+        <li>☐ 云存档（保存游戏进度）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>📋 审核准备</h3>
+      <ul>
+        <li>☐ 包体压缩：主包 &lt; 4MB，超限用分包</li>
+        <li>☐ 广告组件已配置广告位 ID（非测试）</li>
+        <li>☐ 提审时需提供完整游戏体验视频</li>
+        <li>☐ 游戏内容自查：无侵权素材、无敏感内容</li>
+        <li>☐ 登录流程流畅，不能出现卡授权页</li>
+        <li>☐ 类目选择正确（小游戏 → 具体分类）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>📋 上线运营</h3>
+      <ul>
+        <li>☐ 微信数据分析事件接入</li>
+        <li>☐ 订阅消息定时推送召回</li>
+        <li>☐ 版本更新提示（引导用户更新）</li>
+        <li>☐ 收集用户反馈渠道（客服消息）</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 九、开发路线图 ============ -->
+<div class="section">
+  <h2 class="section-title">🗓️ 九、30 天上线路线图</h2>
+  <div class="roadmap">
+    <div class="roadmap-item" data-phase="1">
+      <h3>第 1-7 天 · 原型搭建 <span class="tag tag-green">核心玩法</span></h3>
+      <p>完成核心玩法的 MVP（可运行的 Demo）、基础 Canvas 渲染、点击/触摸交互、简单的计分逻辑、场景切换框架。</p>
+    </div>
+    <div class="roadmap-item" data-phase="2">
+      <h3>第 8-14 天 · 微信能力集成 <span class="tag tag-blue">获客引擎</span></h3>
+      <p>微信登录 + 用户信息、好友排行榜（wx.setUserCloudStorage）、分享到好友/朋友圈、激励视频广告（wx.createRewardedVideoAd）、云存档。</p>
+    </div>
+    <div class="roadmap-item" data-phase="3">
+      <h3>第 15-21 天 · 打磨上线 <span class="tag tag-red">提审准备</span></h3>
+      <p>UI/UX 美化、音效音乐、异常处理 + 弱网适配、包体优化（分包 + 图片压缩）、内部测试 + Bug 修复。</p>
+    </div>
+    <div class="roadmap-item" data-phase="4">
+      <h3>第 22-30 天 · 审核 + 首发 <span class="tag" style="background:#888;color:#fff;">运营准备</span></h3>
+      <p>提交微信审核、准备首发素材（分享图、宣传图）、设置数据分析事件、发布运营活动（限时奖励）、持续迭代。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Footer ============ -->
+<hr>
+<p style="text-align:center;color:#999;font-size:13px;padding:20px 0;">
+  微信小游戏架构方案 · 如需调整具体方向或深入某个模块，随时说
+</p>
+
+</div>
+
+</body>
+</html>
