@@ -64,23 +64,22 @@ Error: app.json: 在项目根目录未找到 app.json
    注意：会弹警告说「测试号不能预览」，点确认继续就行，扫描的人需要是项目的体验成员。
 2. 已经有正式 AppID 的话，把 `project.config.json` 里的 `appid` 换成你自己的，再点上传。
 
-> **⚠️ 但现在还传不上去 —— 上传前必须先压缩图片。**
+> **包体积：已处理，4.2MB / 上限 30MB。**
 >
-> 微信小游戏的限制是**首包 4MB、全部代码包合计 30MB**。这个项目运行时需要的资源
-> （`images/clean/` 里 24 个文件）加起来是 **33MB**，已经超了，开发者工具会拒绝上传。
+> 微信小游戏的限制是**首包 4MB、全部代码包合计 30MB**。这个项目一开始会超：
+> 资源图全是 1024×1024 的 PNG，每个 1~1.6MB，合计 33MB。
+> 但卡片在屏幕上根本用不到这么大——最宽的 4×4 关卡下只显示 **65×74 逻辑像素**，
+> 即使 @DPR=3 的旗舰机也只需 **195×222 实际像素**，1024px 的图里 80% 以上的像素永远看不到。
 >
-> 原因很直白：资源图全是 **1024×1024 的 PNG**，每个 1~1.6MB。但卡片在屏幕上根本用不到这么大——
-> 最宽的 4×4 关卡下卡片只显示 **65×74 逻辑像素**，即使在 DPR=3 的旗舰机上也就 **195×222 实际像素**。
-> 也就是说 1024px 的图里有 80% 以上的像素永远不会被看到。
+> 已经用 `tools/preview/shrink-assets.py` 把 27 张图缩到 512×512（长边），
+> **33MB → 4.1MB**，加上代码实际打包 **4.2MB**，离 30MB 上限还有 7 倍余量。
+> 512 留了 2 倍余量，实测在 @DPR=3 下纹理、线条、渐变全部完整，视觉上看不出差别。
 >
-> **怎么解决**：把 `images/clean/` 下的 PNG 缩到实际需要的大小再重新上传。
-> 缩到 512×512 就够覆盖 DPR=3 的所有场景，体积能降到 1/4，合计约 8MB，轻松过审。
-> 这一步没有做成，因为压缩图片属于「改资源」，超出了本次定稿的范围——
-> 但**不知道这件事就上传会浪费时间**，所以写在这里。
+> `project.config.json` 的 `packOptions.ignore` 另外排除了
+> `legacy/` `docs/` `tools/` 和 `images/` 下的四套原始源图，打包体积从 73MB 降到 4.2MB。
+> 原始 1024×1024 大图备份在 `legacy/images-original/`（33MB，不进包）。
 >
-> `project.config.json` 的 `packOptions.ignore` 已经配好了，会排除掉
-> `legacy/` `docs/` `tools/` 和 `images/` 下的四套原始源图（那 30MB 才是大头里的另一块）。
-> 配完之后打包体积从 73MB 降到 33MB，剩下的就只差图片压缩这一步。
+> 想自己再压小：`python tools/preview/shrink-assets.py`（已缩过的会跳过）。
 
 ### 导入报错了怎么办
 
@@ -90,7 +89,7 @@ Error: app.json: 在项目根目录未找到 app.json
 | 打开是黑屏 | `compileType` 不是 `game` | 改 `project.config.json` 后重开项目 |
 | 目录选错 | 选到了 `legacy/` 或子目录 | 目录要选含 `game.js` 的那一层 |
 | 图片全空 | 没等资源加载完 | 编译后等一两秒，要逐个加载 30 个资源条目 |
-| 点上传报「包体积超限」 | 资源图没压缩，33MB 超了 30MB 上限 | 见[「怎么在手机上玩」](#怎么在手机上玩)里的说明，先缩图 |
+| 点上传报「包体积超限」 | 自己换了更大的图 | 跑 `python tools/preview/shrink-assets.py` 压到 512px |
 
 ---
 
@@ -200,7 +199,7 @@ Error: app.json: 在项目根目录未找到 app.json
 - `images/` 根下的 `cardbacks/` `icons/` `achievements/` `settlement/` 是**原始带水印的源图**，运行时不用，只有 `clean/` 生效。
 - 图片加载失败会退化成 emoji 或纯色方块，不会白屏，但会明显难看。
 - 图标里的 🀄 🃏 💡 ⏱ 🔄 等是 Unicode emoji，**不同手机上长得不一样**。
-- **资源图分辨率严重超标，导致上传超限。** `images/clean/` 里每个 PNG 都是 **1024×1024**、1~1.6MB，24 个文件合计 **33MB**。但卡片实际显示只有 65×74 逻辑像素（@DPR=3 也才 195×222）——**80% 以上的像素永远不会被看到**。微信小游戏首包上限 4MB、代码包合计 30MB，所以**这个状态上传会被拒绝**。缩到 512×512 即可解决（合计约 8MB），详见[「怎么在手机上玩」](#怎么在手机上玩)。
+- **资源图已缩到 512px（原图 1024px，备份在 `legacy/images-original/`）。** 缩图是因为 33MB 会超过微信小游戏 30MB 上限，详见[「怎么在手机上玩」](#怎么在手机上玩)。512 在 @DPR=3 下够用且视觉无差别。
 
 ### 功能边界
 
@@ -235,7 +234,7 @@ MemoryCardGame/                      ← 仓库根目录
 ├── project.private.config.json      ← 开发者工具私有配置（已 gitignore）
 │
 ├── images/
-│   ├── clean/                       ← 实际生效的资源（27 个 PNG）
+│   ├── clean/                       ← 实际生效的资源（27 个 PNG，512px，4.1MB）
 │   │   ├── cardbacks/               ← 7 张卡背
 │   │   ├── icons/                   ← 8 个图标（3 个未被引用）
 │   │   ├── achievements/            ← 7 个成就图标
@@ -253,10 +252,12 @@ MemoryCardGame/                      ← 仓库根目录
 │
 ├── tools/preview/                   ← 截图工装（不参与小游戏打包）
 │   ├── index.html                   ← wx API 的浏览器垫片
-│   └── capture.mjs                  ← 无头 Chromium 截图脚本
+│   ├── capture.mjs                  ← 无头 Chromium 截图脚本
+│   └── shrink-assets.py             ← 把 images/clean 缩到 512px（控包体积）
 │
 ├── HANDOFF.md                       ← 开发交接记录
 └── legacy/                          ← 历史遗留，不参与运行，别接回去
+    ├── images-original/             ← clean/ 的原始 1024px 大图（27 个，33MB）
     ├── js/                          ← 未完成的分层重构（缺 module.exports）
     ├── game.refactored.js           ← 残缺的重构入口
     ├── game.js.bak2                 ← 旧备份
@@ -318,6 +319,26 @@ MemoryCardGame/                      ← 仓库根目录
 工装里有两处**手动时钟**（`__setTime` / `__step`），因为 `game.js` 的粒子、飘字、连击动画全靠 `Date.now()` 算进度，不做虚拟时钟就没法逐帧复现。另有 `__freeze()` 用来清掉 `setTimeout` 驱动的流程，避免真实时间在截图途中改变画面。
 
 改了游戏想加新场景，编辑 `tools/preview/capture.mjs` 里的 `SCENES` 数组，照现有格式加一条 `setup` 就行。
+
+### 换了更大的图之后
+
+如果换了更大的资源图，包体积会超 30MB 上限。压回去：
+
+```bash
+C:\Users\34759\.workbuddy\binaries\python\envs\default\Scripts\python.exe tools\preview\shrink-assets.py
+```
+
+它把 `images/clean/` 下所有 PNG 的长边缩到 512px（`optimize=True`），
+**已缩过的会自动跳过**，所以可以放心重复跑。原始 1024px 大图在
+`legacy/images-original/`，脚本不会碰它。
+
+`tools/preview/` 下三个文件的用途：
+
+| 文件 | 干什么 | 依赖 |
+| --- | --- | --- |
+| `index.html` | `wx` API 的浏览器垫片 | 无 |
+| `capture.mjs` | 无头 Chromium 截图 + 合成 GIF | Node 22+、Chromium、ffmpeg |
+| `shrink-assets.py` | 压资源图控包体积 | Python 3 + Pillow |
 
 ---
 
