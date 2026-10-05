@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记忆翻牌大师 · 音频系统设计文档</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.7; padding: 2rem; }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 2rem; color: #FFD700; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.4rem; color: #FFA94D; margin: 2rem 0 1rem; padding-bottom: 0.3rem; border-bottom: 1px solid #2a2a4e; }
+  h3 { font-size: 1.1rem; color: #4A90D9; margin: 1.5rem 0 0.5rem; }
+  p, li { font-size: 0.95rem; margin-bottom: 0.5rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 1rem; }
+  .tag { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; margin-right: 0.3rem; }
+  .tag-sfx { background: #07c160; color: #fff; }
+  .tag-music { background: #4A90D9; color: #fff; }
+  .tag-ui { background: #9775FA; color: #fff; }
+  .tag-system { background: #FF6B6B; color: #fff; }
+  .card { background: #1a1a2e; border-radius: 10px; padding: 1.2rem; margin: 1rem 0; border: 1px solid #2a2a4e; }
+  .card table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .card th, .card td { padding: 0.5rem 0.8rem; text-align: left; border-bottom: 1px solid #2a2a4e; }
+  .card th { color: #FFA94D; }
+  code { background: #2a2a4e; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.85rem; color: #FFD700; }
+  pre { background: #12121F; border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 0.8rem 0; border: 1px solid #2a2a4e; }
+  pre code { background: none; padding: 0; color: #e0e0e0; }
+  .flow { display: flex; align-items: center; justify-content: center; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0; }
+  .flow-item { background: #2a2a4e; border-radius: 8px; padding: 0.6rem 1rem; text-align: center; min-width: 100px; }
+  .flow-item .label { font-size: 0.75rem; color: #888; }
+  .flow-item .val { font-size: 1rem; color: #FFD700; font-weight: bold; }
+  .flow-arrow { color: #4A90D9; font-size: 1.2rem; }
+  .summary { background: linear-gradient(135deg, #1a1a2e, #2a2a4e); border-radius: 12px; padding: 1.5rem; margin: 1.5rem 0; border: 1px solid #FFD70044; }
+  .summary h3 { color: #FFD700; margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>🎵 记忆翻牌大师 · 音频系统设计</h1>
+<p style="color:#888;">游戏音频工程师 · 音频架构设计文档 · v1.0</p>
+
+<!-- ===== 音频风格 ===== -->
+<div class="summary">
+  <h3>🎧 音频风格定位</h3>
+  <p style="margin-top:0.5rem;"><strong>三个形容词定义游戏听觉体验：</strong></p>
+  <div class="flow">
+    <div class="flow-item"><div class="val">✨ 轻快</div><div class="label">不压玩家节奏</div></div>
+    <div class="flow-arrow">+</div>
+    <div class="flow-item"><div class="val">🔮 神秘</div><div class="label">记忆匹配的氛围感</div></div>
+    <div class="flow-arrow">+</div>
+    <div class="flow-item"><div class="val">🏆 成就感</div><div class="label">配对成功的正反馈</div></div>
+  </div>
+</div>
+
+<!-- ===== 音效清单 ===== -->
+<h2>1. 音效清单 (SFX List)</h2>
+<p>总计 <strong>10 类</strong> 音效事件，覆盖所有游戏交互。全部使用 <strong>程序化合成</strong>（Web Audio Oscillator），无需外挂音频文件，包体积零增长。</p>
+
+<div class="card">
+<table>
+  <thead><tr><th>#</th><th>音效名称</th><th>触发器</th><th>类型</th><th>合成方案</th><th>持续</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><strong>card_flip</strong></td><td>翻/盖卡片</td><td><span class="tag tag-sfx">SFX</span></td><td>短促上升音: 正弦波 400→800Hz, 80ms</td><td>80ms</td></tr>
+    <tr><td>2</td><td><strong>card_match</strong></td><td>配对成功</td><td><span class="tag tag-sfx">SFX</span></td><td>双音和弦: 523Hz+659Hz 钟声, 400ms 淡出</td><td>400ms</td></tr>
+    <tr><td>3</td><td><strong>card_mismatch</strong></td><td>配对失败</td><td><span class="tag tag-sfx">SFX</span></td><td>下降音: 锯齿波 500→150Hz, 250ms</td><td>250ms</td></tr>
+    <tr><td>4</td><td><strong>combo</strong></td><td>连击触发 (2x+)</td><td><span class="tag tag-sfx">SFX</span></td><td>上行琶音: C5→E5→G5, 300ms</td><td>300ms</td></tr>
+    <tr><td>5</td><td><strong>button_click</strong></td><td>UI 按钮</td><td><span class="tag tag-ui">UI</span></td><td>清脆滴答: 方波 1000Hz, 30ms</td><td>30ms</td></tr>
+    <tr><td>6</td><td><strong>level_up</strong></td><td>过关结算</td><td><span class="tag tag-music">MUSIC</span></td><td>胜利琶音: C4→E4→G4→C5, 600ms 渐强</td><td>600ms</td></tr>
+    <tr><td>7</td><td><strong>game_over</strong></td><td>时间用完</td><td><span class="tag tag-system">SYSTEM</span></td><td>低沉下降: 三角波 300→80Hz, 1s</td><td>1.0s</td></tr>
+    <tr><td>8</td><td><strong>countdown_warn</strong></td><td>最后 10s 倒计时</td><td><span class="tag tag-sfx">SFX</span></td><td>脉冲: 正弦波 880Hz, 50ms 每 1s 重复</td><td>50ms × 10</td></tr>
+    <tr><td>9</td><td><strong>page_turn</strong></td><td>关卡页翻页</td><td><span class="tag tag-ui">UI</span></td><td>轻拂: 噪声带通滤波, 80ms</td><td>80ms</td></tr>
+    <tr><td>10</td><td><strong>star_earned</strong></td><td>获得星星</td><td><span class="tag tag-sfx">SFX</span></td><td>闪耀: 正弦波 1200Hz, 150ms × 随星数</td><td>150ms×N</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ===== 自适应音乐 ===== -->
+<h2>2. 自适应音乐系统</h2>
+<p>使用 <strong>水平重序列 (Horizontal Re-sequencing)</strong> 方式，根据游戏状态切换音乐段落。</p>
+
+<div class="card">
+  <h3>📊 音乐状态机</h3>
+  <div class="flow">
+    <div class="flow-item"><div class="val" style="color:#aaa;">MENU</div><div class="label">主菜单/关卡</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-item"><div class="val" style="color:#4A90D9;">SHOWING</div><div class="label">预览记忆</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-item"><div class="val" style="color:#07c160;">PLAYING</div><div class="label">游戏进行</div></div>
+    <div class="flow-arrow">↕</div>
+    <div class="flow-item"><div class="val" style="color:#FF6B6B;">OVER</div><div class="label">结算</div></div>
+  </div>
+
+  <table style="margin-top:1rem;">
+    <thead><tr><th>游戏阶段</th><th>音乐情绪</th><th>速度 (BPM)</th><th>乐器</th></tr></thead>
+    <tbody>
+      <tr><td>主菜单 (MENU)</td><td>安静期待</td><td>80</td><td>钢琴高音 + 氛围 pad</td></tr>
+      <tr><td>预览记忆 (SHOWING)</td><td>专注好奇</td><td>80→100</td><td>拨弦 + 轻打击乐</td></tr>
+      <tr><td>游戏进行 (PLAYING)</td><td>轻快紧张</td><td>100</td><td>完整编曲: 钢琴 + 贝斯 + 鼓</td></tr>
+      <tr><td id="over">结算 (OVER/过关)</td><td>胜利辉煌</td><td>100→80</td><td>凯旋号角 + 竖琴琶音</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ===== 音量参数 ===== -->
+<h2>3. 混音参数 (Mix Parameters)</h2>
+<div class="card">
+<table>
+  <thead><tr><th>总线</th><th>相对音量</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>BGM (背景音乐)</td><td>-6 dB</td><td>持续循环，不抢占注意力</td></tr>
+    <tr><td>SFX (音效)</td><td>0 dB (参考)</td><td>所有游戏交互音效</td></tr>
+    <tr><td>UI (界面音)</td><td>-3 dB</td><td>按钮等 UI 反馈</td></tr>
+    <tr><td>Master</td><td>0 dB</td><td>全局主音量（用户可调）</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ===== 事件映射 ===== -->
+<h2>4. 游戏事件 → 音频触发映射</h2>
+<div class="card">
+<table>
+  <thead><tr><th>游戏事件</th><th>触发音效</th><th>优先级</th><th>防抖</th></tr></thead>
+  <tbody>
+    <tr><td>翻卡</td><td>card_flip</td><td>高</td><td>无</td></tr>
+    <tr><td>盖卡 (预览结束)</td><td>card_flip (降调)</td><td>高</td><td>无</td></tr>
+    <tr><td>配对成功</td><td>card_match + combo(连击时)</td><td>高</td><td>100ms</td></tr>
+    <tr><td>配对失败</td><td>card_mismatch</td><td>高</td><td>无</td></tr>
+    <tr><td>点击按钮</td><td>button_click</td><td>中</td><td>50ms</td></tr>
+    <tr><td>关卡翻页</td><td>page_turn</td><td>低</td><td>200ms</td></tr>
+    <tr><td>倒计时 ≤10s</td><td>countdown_warn (每秒)</td><td>高</td><td>900ms</td></tr>
+    <tr><td>过关</td><td>level_up</td><td>最高</td><td>无</td></tr>
+    <tr><td>时间到</td><td>game_over</td><td>最高</td><td>无</td></tr>
+    <tr><td>获得星星</td><td>star_earned (×星数)</td><td>中</td><td>200ms</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ===== 性能预算 ===== -->
+<h2>5. 音频性能预算</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>指标</th><th>预算</th><th>策略</th></tr></thead>
+    <tbody>
+      <tr><td>同时发声 (Voice Count)</td><td>4 个</td><td>最多 2 BGM + 2 SFX 叠放</td></tr>
+      <tr><td>音频缓存</td><td>0 KB</td><td>全程序化合成，无外部音频文件</td></tr>
+      <tr><td>每帧音频 CPU</td><td>&lt; 0.1ms</td><td>合成在音频线程，不影响主渲染循环</td></tr>
+      <tr><td>场景切换静音</td><td>30ms 淡出</td><td>BGM 切换时快速淡出避免爆音</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ===== 技术实现 ===== -->
+<h2>6. 技术实现方案</h2>
+
+<h3>6.1 程序化合成 (Procedural Audio)</h3>
+<p>所有音效通过 Web Audio API 实时合成，零外部依赖：</p>
+<pre><code>// 核心合成引擎示例：翻牌音效
+AudioManager.prototype.playFlip = function() {
+  const ctx = this.audioCtx;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(400, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.08);
+  gain.gain.setValueAtTime(0.3, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(); osc.stop(ctx.currentTime + 0.08);
+};</code></pre>
+
+<h3>6.2 自适应 BGM 选段</h3>
+<p>使用 <strong>Web Audio Oscillator 序列</strong> 生成短旋律循环，通过 <code>setState(state)</code> 切换：</p>
+<pre><code>// BGM 状态切换
+audio.setState('MENU');    // → 安静钢琴旋律
+audio.setState('PLAYING'); // → 轻快完整编曲
+audio.setState('OVER');    // → 胜利/失败和弦</code></pre>
+
+<h3>6.3 微信小游戏集成</h3>
+<p>微信小游戏支持 <code>wx.createWebAudioContext()</code>（基础库 2.28.0+）。底层封装：</p>
+<pre><code>// 惰性初始化 — 用户首次交互后才创建 AudioContext
+var AudioManager = {
+  _ctx: null,
+  _ready: false,
+  init: function() {
+    try {
+      this._ctx = wx.createWebAudioContext();
+      this._ready = true;
+    } catch(e) {
+      console.warn('[Audio] WebAudio not supported, audio disabled');
+    }
+  }
+};</code></pre>
+
+<!-- ===== 集成计划 ===== -->
+<h2>7. 集成计划</h2>
+<div class="card">
+  <ol>
+    <li><strong>创建 audio_manager.js</strong> — 独立的音频管理模块</li>
+    <li><strong>game.js 初始化</strong> — 在文件开头加载 <code>AudioManager.init()</code></li>
+    <li><strong>注入音效钩子</strong> — 替换 <code>tapFeedback()</code>，在 <code>onCardClick</code>、<code>checkMatch</code>、<code>gameOver</code> 等处添加音效</li>
+    <li><strong>BGM 集成</strong> — 在 <code>renderMenu</code>、<code>startGame</code>、<code>gameOver</code> 中切换 BGM 状态</li>
+    <li><strong>音量控制</strong> — 在设置页面添加音乐/音效开关（待实现）</li>
+  </ol>
+</div>
+
+<!-- ===== 下一步 ===== -->
+<h2>8. 声景路线图</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>阶段</th><th>内容</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>Phase 1</td><td>全部 10 类 SFX 程序化合成 + BGM 循环</td><td style="color:#FFD700;">✨ 本版本实现</td></tr>
+      <tr><td>Phase 2</td><td>专业录制音效替换 + 自适应 BGM 多层</td><td style="color:#888;">待定</td></tr>
+      <tr><td>Phase 3</td><td>语音播报 + 连击语音反馈</td><td style="color:#888;">待定</td></tr>
+      <tr><td>Phase 4</td><td>设置页（音乐/音效开关 + 音量滑块）</td><td style="color:#888;">待定</td></tr>
+    </tbody>
+  </table>
+</div>
+
+</div>
+</body>
+</html>

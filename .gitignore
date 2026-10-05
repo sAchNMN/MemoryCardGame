@@ -1,0 +1,14 @@
+# AI 工具目录
+.agents/
+.codex/
+.workbuddy/
+
+# 微信开发者工具私有配置（含本机 libVersion / 热重载设置，机器相关，不应提交）
+project.private.config.json
+
+# 临时文件
+temp_insert.js
+
+# 手工备份快照（文档修正、配置修正前的原件，仅供本地回滚）
+*.bak-20261005
+*.bak
