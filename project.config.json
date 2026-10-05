@@ -8,7 +8,15 @@
     "enhance": true
   },
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      { "type": "folder", "value": "legacy" },
+      { "type": "folder", "value": "docs" },
+      { "type": "folder", "value": "tools" },
+      { "type": "folder", "value": "images/achievements" },
+      { "type": "folder", "value": "images/cardbacks" },
+      { "type": "folder", "value": "images/icons" },
+      { "type": "folder", "value": "images/settlement" }
+    ],
     "include": []
   },
   "editorSetting": {}
