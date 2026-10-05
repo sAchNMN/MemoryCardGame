@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- 缺这一行，移动端模拟会用 980px 布局视口，canvas 只占屏幕左上一角 -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>记忆翻牌大师 · 本地预览工装</title>
+<style>
+  html,body{margin:0;padding:0;background:#0f0f1a;overflow:hidden;}
+  #stage{position:relative;width:390px;height:844px;}
+  #game{display:block;}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="game"></canvas></div>
+<script>
+/*
+ * 本地预览工装 —— 只为在桌面浏览器里跑真实的 game.js 并截图，不参与小游戏打包。
+ *
+ * 它把微信小游戏运行时缺失的 wx.* API 换成浏览器等价实现：
+ *   wx.createCanvas         → 已有的 <canvas> 元素
+ *   wx.createImage          → new Image()，并把资源路径改写成相对本工装目录
+ *   wx.getSystemInfoSync    → 固定手机尺寸 + 刘海 safeArea
+ *   wx.get/setStorageSync   → localStorage
+ *   wx.createWebAudioContext→ 不提供（AudioManager 自动降级为静音，不报错）
+ *   触摸 / 生命周期 / 分享 / 震动 → 空实现
+ *
+ * game.js 是普通脚本，顶层 var/function 都会挂到 window 上，
+ * 所以截图脚本可以直接改 state.phase、调 render() 来切场景。
+ */
+(function () {
+  var BASE = '../../';            // 本文件位于 tools/preview/，资源在仓库根
+  var VIEW = { width: 390, height: 844, dpr: 2, safeTop: 47, safeBottom: 34 };
+
+  var stage = document.getElementById('stage');
+  var canvas = document.getElementById('game');
+  stage.style.width = VIEW.width + 'px';
+  stage.style.height = VIEW.height + 'px';
+
+  // 预置存档：让截图里的关卡进度 / 金币看起来像玩过一阵子
+  var store = {
+    coins: 480,
+    best_score: 1260,
+    level_progress: { 1: 3, 2: 3, 3: 2, 4: 3, 5: 1 },
+    purchased_items: ['cardback_classic', 'cardback_sakura'],
+    daily_streak: { lastDate: '', streak: 2, history: [] },
+    achievements: { first_win: 1, games_10: 1, combo_5: 1, timed_20: 1 },
+    achievement_stats: { gamesPlayed: 12, maxCombo: 6, propsUsed: { peek: 3, hint: 1 } }
+  };
+
+  function noop() {}
+  var touch = { start: [], move: [], end: [] };
+
+  // ---- 手动时钟 ----
+  // game.js 里的粒子、飘字、连击动画都用 Date.now() 算进度，直接跑 rAF 无法复现。
+  // 这里把 requestAnimationFrame 换成回调收集器、把 Date.now 换成虚拟时钟，
+  // 截图脚本就能逐帧精确推进动画。
+  var rafCallbacks = [];
+  var virtualNow = 1000000;   // 给一个远离 0 的起点，避免和0 比较的边界问题
+  window.requestAnimationFrame = function (cb) { rafCallbacks.push(cb); return rafCallbacks.length; };
+  window.Date.now = function () { return virtualNow; };
+
+  window.__setTime = function (ms) { virtualNow = ms; };
+  window.__getTime = function () { return virtualNow; };
+  // 推进一帧：只把收集到的 rAF 回调跑一遍（gameLoop 内部会再注册下一帧）
+  window.__step = function (dtMs) {
+    virtualNow += dtMs;
+    var cbs = rafCallbacks;
+    rafCallbacks = [];
+    for (var i = 0; i < cbs.length; i++) {
+      try { cbs[i](virtualNow); } catch (e) { console.error('[step]', e && e.message); }
+    }
+  };
+
+  window.wx = {
+    createCanvas: function () { return canvas; },
+
+    createImage: function () {
+      // 必须返回真正的 HTMLImageElement，否则 ctx.drawImage 会直接抛类型错误。
+      // 做法：在真Image 上劫持 src 访问器，把仓库根相对路径补成相对本工装目录。
+      var real = new Image();
+      var logical = '';
+      Object.defineProperty(real, 'src', {
+        configurable: true,
+        get: function () { return logical; },
+        set: function (v) {
+          logical = v;
+          real.setAttribute('src', BASE + v);
+        }
+      });
+      return real;
+    },
+
+    getSystemInfoSync: function () {
+      return {
+        windowWidth: VIEW.width,
+        windowHeight: VIEW.height,
+        screenWidth: VIEW.width,
+        screenHeight: VIEW.height,
+        pixelRatio: VIEW.dpr,
+        SDKVersion: '3.0.0',
+        safeArea: {
+          top: VIEW.safeTop,
+          left: 0,
+          right: VIEW.width,
+          bottom: VIEW.height - VIEW.safeBottom,
+          width: VIEW.width,
+          height: VIEW.height - VIEW.safeTop - VIEW.safeBottom
+        }
+      };
+    },
+
+    getStorageSync: function (k) { return store[k] === undefined ? '' : store[k]; },
+    setStorageSync: function (k, v) { store[k] = v; },
+
+    onTouchStart: function (fn) { touch.start.push(fn); },
+    onTouchMove: function (fn) { touch.move.push(fn); },
+    onTouchEnd: function (fn) { touch.end.push(fn); },
+
+    onShow: noop,
+    onHide: noop,
+    onShareAppMessage: noop,
+    showShareMenu: noop,
+    setUserCloudStorage: noop,
+    vibrateShort: noop
+    // 故意不提供 createWebAudioContext：让 AudioManager 走静音降级分支
+  };
+
+  // 模拟一次点击（onTouchStart + onTouchEnd），复用 game.js 真实的事件处理链
+  window.__tap = function (x, y) {
+    var res = {
+      touches: [{ clientX: x, clientY: y, x: x, y: y }],
+      changedTouches: [{ clientX: x, clientY: y, x: x, y: y }]
+    };
+    touch.start.forEach(function (f) { f(res); });
+    touch.end.forEach(function (f) { f(res); });
+  };
+
+  // 冻结所有 setTimeout/setInterval 驱动的流程（预览倒计时、翻回、倒计时条），
+  // 免得真实时间在截图途中把画面改掉
+  window.__freeze = function () {
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+    ['_previewTimer', '_matchTimer', '_unflipTimer'].forEach(function (k) {
+      if (state[k]) { clearTimeout(state[k]); state[k] = null; }
+    });
+    if (window.comboAnim) comboAnim = null;
+  };
+
+  window.__assetStats = function () {
+    var loaded = 0, total = 0;
+    for (var k in window.ASSET_IMAGES) {
+      if (!Object.prototype.hasOwnProperty.call(window.ASSET_IMAGES, k)) continue;
+      total++;
+      if (window.ASSET_IMAGES[k] && window.ASSET_IMAGES[k]._loaded) loaded++;
+    }
+    return { loaded: loaded, total: total };
+  };
+})();
+</script>
+<script src="../../game.js"></script>
+<script>
+  // game.js 已执行完（它自己会调 render() + rAF(gameLoop)），等资源到位再放行截图
+  window.__ready = false;
+  (function waitAssets() {
+    var s = window.__assetStats();
+    if (s.total > 0 && s.loaded === s.total) { window.__ready = true; return; }
+    setTimeout(waitAssets, 60);
+  })();
+</script>
+</body>
+</html>

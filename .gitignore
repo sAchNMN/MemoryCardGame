@@ -3,6 +3,11 @@
 .codex/
 .workbuddy/
 
+# 截图工装的中间产物（浏览器 profile、帧序列），可随时重新生成
+tools/preview/.frames/
+tools/preview/.chrome-profile/
+tools/preview/.probe*/
+
 # 微信开发者工具私有配置（含本机 libVersion / 热重载设置，机器相关，不应提交）
 project.private.config.json
 
@@ -11,4 +16,5 @@ temp_insert.js
 
 # 手工备份快照（文档修正、配置修正前的原件，仅供本地回滚）
 *.bak-20261005
+*.bak-20261005-*
 *.bak
